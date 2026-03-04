@@ -14,6 +14,8 @@
 
 [![Watch the demo](https://img.shields.io/badge/Demo-Watch%20on%20YouTube-red?logo=youtube)](https://youtu.be/nO8xFNHX-HA)
 
+**New here?** Read the [Friendly Guide](dream-server/docs/HOW-DREAM-SERVER-WORKS.md) — a complete walkthrough of what Dream Server is, how it works, and how to make it your own. No technical background needed. <!-- Audio version link: coming soon -->
+
 </div>
 
 ---
