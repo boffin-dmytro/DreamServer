@@ -28,8 +28,8 @@ The Critical finding should be addressed immediately — format-valid credential
 **Detected by:** gitleaks (generic-api-key)
 
 ```python
-API_KEY    = 'APIRUdt5f4Hp87o'
-API_SECRET = 'bTpgs0RC42jjluOevB9D64zcYhZFG7qEdU0T1m1QMNX'
+API_KEY    = 'APIRUdt****'
+API_SECRET = 'bTpgs0****'
 ```
 
 The file header reads `Deploy to: /home/michael/hvac-token-server.py`. The org contact on GitHub is `michael@lightheartlabs.com`. The credentials are format-valid:
@@ -191,7 +191,7 @@ The fallback LiveKit URL uses `ws://` (unencrypted WebSocket). All voice audio i
 
 ---
 
-### M5 — `local` keyword used outside function scope
+### M5 — `local` keyword used outside function scope *(addressed in PR #72)*
 
 **File:** `dream-server/installers/phases/11-services.sh:32-33`
 **Detected by:** shellcheck (SC2168, severity: error)
