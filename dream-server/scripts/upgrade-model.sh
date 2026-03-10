@@ -235,7 +235,10 @@ start_llm() {
     if [[ -f "$env_file" ]]; then
         # Update active model env key for detected inference backend.
         if grep -q "^${MODEL_ENV_KEY}=" "$env_file"; then
-            sed -i "s|^${MODEL_ENV_KEY}=.*|${MODEL_ENV_KEY}=$model|" "$env_file"
+            # Use awk index() instead of sed to avoid delimiter collisions
+            awk -v k="$MODEL_ENV_KEY" -v v="$model" '{
+                if (index($0, k "=") == 1) print k "=" v; else print
+            }' "$env_file" > "${env_file}.tmp" && mv "${env_file}.tmp" "$env_file"
         else
             echo "${MODEL_ENV_KEY}=$model" >> "$env_file"
         fi

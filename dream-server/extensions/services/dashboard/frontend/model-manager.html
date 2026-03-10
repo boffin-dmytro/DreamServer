@@ -174,9 +174,8 @@
 // Model Manager UI Logic
 // HTML escape function to prevent XSS
 function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
+    const map = {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'};
+    return String(text).replace(/[&<>"']/g, m => map[m]);
 }
 
 const ModelManager = {
@@ -244,7 +243,7 @@ const ModelManager = {
                 </div>
                 <div class="model-description">${escapeHtml(model.description || '')}</div>
                 <div class="model-actions">
-                    <button class="model-btn download" onclick="ModelManager.downloadModel('${escapeHtml(model.id)}')">
+                    <button class="model-btn download" data-model-id="${escapeHtml(model.id)}" onclick="ModelManager.downloadModel(this.dataset.modelId)">
                         Download
                     </button>
                 </div>
@@ -267,10 +266,10 @@ const ModelManager = {
                     <span class="model-meta">${model.size_gb}GB • ${escapeHtml(model.status)}</span>
                 </div>
                 <div class="model-actions">
-                    <button class="model-btn switch" onclick="ModelManager.switchModel('${escapeHtml(model.id)}')">
+                    <button class="model-btn switch" data-model-id="${escapeHtml(model.id)}" onclick="ModelManager.switchModel(this.dataset.modelId)">
                         Switch
                     </button>
-                    <button class="model-btn delete" onclick="ModelManager.deleteModel('${escapeHtml(model.id)}')">
+                    <button class="model-btn delete" data-model-id="${escapeHtml(model.id)}" onclick="ModelManager.deleteModel(this.dataset.modelId)">
                         Delete
                     </button>
                 </div>
