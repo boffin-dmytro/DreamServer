@@ -26,7 +26,7 @@ Intent classes:
 Default policy (policy.yaml):
   - ExecuteCommand: allowlist of safe commands; deny everything else
   - WriteFile: deny writes outside /home/node/.openclaw/workspace
-  - Rate limit: 60 requests/minute across all intents
+  - Rate limit: 60 requests/minute per session
   - All decisions logged to audit.jsonl (append-only)
 """
 
@@ -64,7 +64,7 @@ DEFAULT_POLICY = {
         "ExecuteCommand": {
             "mode": "allowlist",
             "allowed": ["ls", "cat", "grep", "find", "head", "tail", "wc",
-                        "python3", "node", "echo", "pwd", "env", "which"],
+                        "echo", "pwd", "env", "which"],
             "deny_patterns": [
                 r"rm\s+-rf",      # recursive delete
                 r">\s*/dev/sd",   # disk writes
@@ -113,19 +113,23 @@ def load_policy() -> dict:
 
 # ── Rate limiting ─────────────────────────────────────────────────────────────
 
-_request_times: deque = deque()
+_session_request_times: dict[str, deque] = {}
 
 
-def check_rate_limit(policy: dict) -> bool:
-    """Return True if the request is within rate limits."""
+def check_rate_limit(policy: dict, session_id: Optional[str]) -> bool:
+    """Return True if the request is within rate limits (per session)."""
     limit = policy.get("rate_limit", {}).get("requests_per_minute", RATE_LIMIT)
+    key = session_id or "_global"
+    if key not in _session_request_times:
+        _session_request_times[key] = deque()
+    times = _session_request_times[key]
     now = time.monotonic()
     cutoff = now - 60.0
-    while _request_times and _request_times[0] < cutoff:
-        _request_times.popleft()
-    if len(_request_times) >= limit:
+    while times and times[0] < cutoff:
+        times.popleft()
+    if len(times) >= limit:
         return False
-    _request_times.append(now)
+    times.append(now)
     return True
 
 
@@ -139,16 +143,16 @@ _SPAWN_VERBS = {"spawn", "agent", "sub_agent", "subagent", "delegate"}
 
 
 def classify_intent(tool_name: str, args: dict) -> str:
-    t = tool_name.lower()
-    if any(v in t for v in _EXEC_VERBS):
+    tokens = set(re.split(r"[^a-z0-9]", tool_name.lower()))
+    if tokens & _EXEC_VERBS:
         return "ExecuteCommand"
-    if any(v in t for v in _READ_VERBS):
+    if tokens & _READ_VERBS:
         return "ReadFile"
-    if any(v in t for v in _WRITE_VERBS):
+    if tokens & _WRITE_VERBS:
         return "WriteFile"
-    if any(v in t for v in _NET_VERBS):
+    if tokens & _NET_VERBS:
         return "NetworkFetch"
-    if any(v in t for v in _SPAWN_VERBS):
+    if tokens & _SPAWN_VERBS:
         return "SpawnAgent"
     # Infer from args
     if "command" in args or "cmd" in args:
@@ -176,7 +180,7 @@ def evaluate(intent: str, tool_name: str, args: dict, policy: dict) -> tuple[boo
     if mode == "allowlist":
         command = args.get("command", args.get("cmd", ""))
         if not command:
-            return True, "no command specified"
+            return False, "empty command denied"
         # Check command base name
         base = command.strip().split()[0] if command.strip() else ""
         allowed = intent_policy.get("allowed", [])
@@ -192,12 +196,11 @@ def evaluate(intent: str, tool_name: str, args: dict, policy: dict) -> tuple[boo
         path = str(args.get("path", args.get("file", args.get("filename", ""))))
         if not path:
             return True, "no path specified"
-        import posixpath
-        normalized = posixpath.normpath(path)
+        real = os.path.realpath(path)
         allowed_paths = intent_policy.get("allowed_paths", [])
-        if any(normalized.startswith(p) for p in allowed_paths):
-            return True, f"path is within allowed zone"
-        return False, f"write to '{normalized}' is outside allowed paths"
+        if any(real == p or real.startswith(p.rstrip("/") + "/") for p in allowed_paths):
+            return True, "path is within allowed zone"
+        return False, f"write to '{real}' is outside allowed paths"
 
     return True, f"unknown mode '{mode}', defaulting to allow"
 
@@ -259,7 +262,7 @@ async def verify(req: VerifyRequest, request: Request):
     decision_id = f"{int(time.time() * 1000)}-{id(req) & 0xFFFF:04x}"
 
     # Rate limit check
-    if not check_rate_limit(policy):
+    if not check_rate_limit(policy, req.session_id):
         _decision_counts["rate_limited"] += 1
         entry = {
             "id": decision_id,
@@ -338,4 +341,4 @@ async def metrics():
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("APE_PORT", "7890"))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host="127.0.0.1", port=port)
