@@ -12,6 +12,9 @@
 
 set -euo pipefail
 
+# Prerequisites
+command -v jq >/dev/null 2>&1 || { echo "Error: jq is required but not installed." >&2; echo "Install with: apt install jq (Debian/Ubuntu) or brew install jq (macOS)" >&2; exit 1; }
+
 #==============================================================================
 # CONFIGURATION
 #==============================================================================
@@ -94,13 +97,13 @@ cmd_check() {
     
     # Fetch latest release from GitHub
     local api_url="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
-    local auth_header=""
-    if [[ -n "${GITHUB_TOKEN:-}" ]]; then
-        auth_header="-H \"Authorization: Bearer ${GITHUB_TOKEN}\""
-    fi
-    
     local response
-    if ! response=$(curl -sf ${auth_header} "${api_url}" 2>/dev/null); then
+    local curl_args=(-sf --max-time 15)
+    if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+        curl_args+=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
+    fi
+
+    if ! response=$(curl "${curl_args[@]}" "${api_url}" 2>/dev/null); then
         log_error "Failed to check for updates. Check network or GITHUB_TOKEN."
         return 1
     fi
@@ -221,16 +224,15 @@ cmd_backup() {
         ((files_backed_up++))
     fi
     
-    # Generate metadata
-    cat > "$backup_path/metadata.json" << EOF
-{
-    "backup_id": "${backup_id}",
-    "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    "version": "$(get_current_version)",
-    "files_count": ${files_backed_up},
-    "install_dir": "${INSTALL_DIR}"
-}
-EOF
+    # Generate metadata (use jq for safe JSON construction)
+    jq -n \
+        --arg bid "$backup_id" \
+        --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        --arg ver "$(get_current_version)" \
+        --argjson fc "$files_backed_up" \
+        --arg dir "$INSTALL_DIR" \
+        '{backup_id: $bid, timestamp: $ts, version: $ver, files_count: $fc, install_dir: $dir}' \
+        > "$backup_path/metadata.json"
     
     log_ok "Backup created: ${backup_path}"
     log_info "Files backed up: ${files_backed_up}"
@@ -292,11 +294,34 @@ cmd_update() {
     
     # Restart services
     log_info "Restarting services..."
-    local compose_file="${INSTALL_DIR}/docker-compose.yml"
-    if [[ -f "$compose_file" ]]; then
+    local compose_flags
+    if [[ -x "${INSTALL_DIR}/scripts/resolve-compose-stack.sh" ]]; then
+        compose_flags=$(bash "${INSTALL_DIR}/scripts/resolve-compose-stack.sh" --script-dir "$INSTALL_DIR" 2>/dev/null | tail -1)
+    fi
+    # Validate that every -f target exists before using compose_flags
+    if [[ -n "${compose_flags:-}" ]]; then
+        local all_exist=true
+        for flag_file in $(echo "$compose_flags" | grep -o -- '-f [^ ]*' | cut -d' ' -f2); do
+            if [[ ! -f "${INSTALL_DIR}/${flag_file}" ]]; then
+                log_warn "Compose file not found: ${flag_file} — falling back to docker-compose.yml"
+                all_exist=false
+                break
+            fi
+        done
+        if [[ "$all_exist" != "true" ]]; then
+            compose_flags=""
+        fi
+    fi
+    if [[ -n "${compose_flags:-}" ]]; then
+        cd "$INSTALL_DIR"
+        docker compose $compose_flags down --remove-orphans 2>/dev/null || docker-compose $compose_flags down --remove-orphans
+        docker compose $compose_flags up -d 2>/dev/null || docker-compose $compose_flags up -d
+    elif [[ -f "${INSTALL_DIR}/docker-compose.yml" ]]; then
         cd "$INSTALL_DIR"
         docker compose down --remove-orphans 2>/dev/null || docker-compose down --remove-orphans
         docker compose up -d 2>/dev/null || docker-compose up -d
+    else
+        log_warn "No compose files found. Skipping container restart."
     fi
     
     # Run health checks
@@ -370,14 +395,16 @@ cmd_rollback() {
     cd "$INSTALL_DIR"
     docker compose down 2>/dev/null || docker-compose down 2>/dev/null || true
     
-    # Restore files
+    # Restore files (enable dotglob to include .env, .version, etc.)
     log_info "Restoring configuration files..."
+    shopt -s dotglob
     for file in "$backup_path"/*; do
         if [[ -f "$file" && "$(basename "$file")" != "metadata.json" ]]; then
             cp "$file" "$INSTALL_DIR/"
             log_info "  Restored: $(basename "$file")"
         fi
     done
+    shopt -u dotglob
     
     # Restart services
     log_info "Restarting services..."
@@ -406,7 +433,7 @@ cmd_changelog() {
         log_info "Fetching changelog for version ${version}..."
         local api_url="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${version}"
         local response
-        if response=$(curl -sf "${api_url}" 2>/dev/null); then
+        if response=$(curl -sf --max-time 15 "${api_url}" 2>/dev/null); then
             echo "$response" | jq -r '.body // "No changelog available."'
         else
             log_error "Could not fetch changelog for ${version}"
@@ -421,7 +448,7 @@ cmd_changelog() {
         else
             log_warn "No local CHANGELOG.md found."
             log_info "Fetching latest release notes from GitHub..."
-            cmd_changelog "$(curl -sf "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" | jq -r '.tag_name // empty')" || true
+            cmd_changelog "$(curl -sf --max-time 15 "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" | jq -r '.tag_name // empty')" || true
         fi
     fi
 }
@@ -480,7 +507,7 @@ cmd_health() {
     fi
     
     # Check llama-server health
-    local llama_server_port="${LLAMA_SERVER_PORT:-8080}"
+    local llama_server_port="${OLLAMA_PORT:-${LLAMA_SERVER_PORT:-8080}}"
     if curl -sf "http://localhost:${llama_server_port}/v1/models" &>/dev/null; then
         log_ok "llama-server: healthy"
     else
@@ -521,7 +548,7 @@ Environment Variables:
   MAX_BACKUPS         Number of backups to retain (default: 10)
   HEALTH_TIMEOUT      Seconds to wait for health checks (default: 120)
   DASHBOARD_PORT      Dashboard API port (default: 3002)
-  LLAMA_SERVER_PORT   llama-server port (default: 8080)
+  OLLAMA_PORT         llama-server port (default: 8080)
 
 Examples:
   dream-update.sh check

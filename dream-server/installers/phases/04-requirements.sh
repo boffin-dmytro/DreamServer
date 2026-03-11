@@ -18,6 +18,8 @@
 
 chapter "REQUIREMENTS CHECK"
 
+[[ -f "${SCRIPT_DIR:-}/lib/safe-env.sh" ]] && . "${SCRIPT_DIR}/lib/safe-env.sh"
+
 REQUIREMENTS_MET=true
 TIER_RANK="$(tier_rank "$TIER")"
 
@@ -35,7 +37,7 @@ if [[ -x "$SCRIPT_DIR/scripts/preflight-engine.sh" ]]; then
         --compose-overlays "${CAP_COMPOSE_OVERLAYS:-}" \
         --script-dir "$SCRIPT_DIR" \
         --env 2>>"$LOG_FILE")"
-    eval "$PREFLIGHT_ENV"
+    load_env_from_output <<< "$PREFLIGHT_ENV"
 
     log "Preflight report: $PREFLIGHT_REPORT_FILE"
     if [[ "${PREFLIGHT_BLOCKERS:-0}" -gt 0 ]]; then
@@ -122,12 +124,21 @@ else
 fi
 
 # Port availability check (handles IPv4 and IPv6)
+_port_check_warned=false
 check_port() {
     local port=$1
     if command -v ss &> /dev/null; then
         ss -tln 2>/dev/null | grep -qE ":${port}(\s|$)" && return 1
     elif command -v netstat &> /dev/null; then
         netstat -tln 2>/dev/null | grep -qE ":${port}(\s|$)" && return 1
+    else
+        # Neither tool available — warn once, then skip port checks
+        if [[ "$_port_check_warned" != "true" ]]; then
+            warn "Neither 'ss' nor 'netstat' found — cannot verify port availability"
+            warn "Install iproute2 (for ss) or net-tools (for netstat) to enable port checks"
+            _port_check_warned=true
+        fi
+        return 0  # Can't check, assume free but user is warned
     fi
     return 0
 }

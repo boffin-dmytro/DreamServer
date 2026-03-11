@@ -25,7 +25,20 @@ if [[ -f "$_FT_DIR/lib/service-registry.sh" ]]; then
     export SCRIPT_DIR="$_FT_DIR"
     . "$_FT_DIR/lib/service-registry.sh"
     sr_load
-    [[ -f "$_FT_DIR/.env" ]] && set -a && . "$_FT_DIR/.env" && set +a
+    if [[ -f "$_FT_DIR/.env" ]]; then
+        set -a
+        while IFS='=' read -r key value; do
+            [[ "$key" =~ ^[[:space:]]*# ]] && continue
+            [[ -z "$key" ]] && continue
+            [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+            value="${value%\"}"
+            value="${value#\"}"
+            value="${value%\'}"
+            value="${value#\'}"
+            export "$key=$value"
+        done < "$_FT_DIR/.env"
+        set +a
+    fi
 fi
 
 # Service endpoints — resolved from registry
@@ -132,7 +145,7 @@ test_tts_functional() {
     fi
     
     # Check it's a valid WAV file
-    if ! file "$output_file" | grep -qi "audio\|wav\|riff"; then
+    if ! file "$output_file" | grep -qiE "audio|wav|riff"; then
         warn "TTS output may not be valid WAV: $(file "$output_file")"
         pass "TTS generates audio file ($file_size bytes)"
     else
@@ -229,7 +242,7 @@ test_whisper_functional() {
         return 1
     fi
     
-    if echo "$transcription" | grep -qi "hello\|world"; then
+    if echo "$transcription" | grep -qiE "hello|world"; then
         pass "Whisper transcribes correctly: '$transcription'"
     else
         warn "Whisper transcribed: '$transcription'"

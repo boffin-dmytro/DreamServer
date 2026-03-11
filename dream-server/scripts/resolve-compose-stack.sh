@@ -120,11 +120,12 @@ if ext_dir.exists():
             service = manifest.get("service", {})
             # Check GPU backend compatibility
             backends = service.get("gpu_backends", ["amd", "nvidia"])
-            if gpu_backend not in backends and "all" not in backends:
+            # "none" means CPU-only — compatible with any GPU backend
+            if gpu_backend not in backends and "all" not in backends and "none" not in backends:
                 continue
             # Get compose file from manifest
             compose_rel = service.get("compose_file", "")
-            if compose_rel:
+            if compose_rel and not compose_rel.endswith(".disabled"):
                 compose_path = service_dir / compose_rel
                 if compose_path.exists():
                     resolved.append(str(compose_path.relative_to(script_dir)))
@@ -132,7 +133,8 @@ if ext_dir.exists():
             gpu_overlay = service_dir / f"compose.{gpu_backend}.yaml"
             if gpu_overlay.exists():
                 resolved.append(str(gpu_overlay.relative_to(script_dir)))
-        except Exception:
+        except Exception as e:
+            print(f"WARNING: skipping {service_dir.name}: {e}", file=sys.stderr)
             continue
 
 # Include docker-compose.override.yml if it exists (user customizations)

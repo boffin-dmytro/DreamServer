@@ -150,9 +150,18 @@ extract_backup() {
     fi
 
     if [[ -f "$compressed" ]]; then
+        # Validate: reject archives with absolute paths or path traversal
+        if tar -tzf "$compressed" 2>/dev/null | grep -qE '(^/|\.\./)'; then
+            log_error "Backup archive contains unsafe paths (absolute or ../) — refusing to extract"
+            return 1
+        fi
         log_info "Extracting compressed backup..."
         mkdir -p "$uncompressed"
-        tar xzf "$compressed" -C "$BACKUP_ROOT"
+        if ! tar xzf "$compressed" --no-same-owner -C "$BACKUP_ROOT"; then
+            log_error "Failed to extract backup archive"
+            rm -rf "$uncompressed"
+            return 1
+        fi
         echo "$uncompressed"
         return 0
     fi
@@ -220,10 +229,10 @@ dry_run_preview() {
     if [[ "$restore_config" == "true" ]]; then
         echo "Config Files to Restore:"
         echo "───────────────────────────────────────────────────────────────────"
-        local config_files=(".env" "docker-compose.yml" ".version")
-        for file in "${config_files[@]}"; do
-            if [[ -f "$backup_dir/$file" ]]; then
-                echo "  ✓ $file"
+        # Dynamically discover config files (dotfiles + compose overlays + scripts)
+        for file in "$backup_dir"/.env "$backup_dir"/.version "$backup_dir"/docker-compose*.y*ml "$backup_dir"/dream-*.sh; do
+            if [[ -f "$file" ]]; then
+                echo "  ✓ $(basename "$file")"
             fi
         done
         if [[ -d "$backup_dir/config" ]]; then
@@ -275,12 +284,11 @@ restore_config() {
     local backup_dir="$1"
     log_step "Restoring configuration..."
 
-    local config_files=(".env" "docker-compose.yml" ".version" "dream-preflight.sh" "dream-update.sh")
-
-    for file in "${config_files[@]}"; do
-        if [[ -f "$backup_dir/$file" ]]; then
-            cp "$backup_dir/$file" "$DREAM_DIR/"
-            log_success "Restored: $file"
+    # Dynamically discover config files (dotfiles + compose overlays + scripts)
+    for file in "$backup_dir"/.env "$backup_dir"/.version "$backup_dir"/docker-compose*.y*ml "$backup_dir"/dream-*.sh; do
+        if [[ -f "$file" ]]; then
+            cp "$file" "$DREAM_DIR/"
+            log_success "Restored: $(basename "$file")"
         fi
     done
 
@@ -300,13 +308,19 @@ verify_restore() {
     local all_good=true
 
     # Check critical paths
-    local critical_paths=("data/open-webui" "docker-compose.yml")
-    for path in "${critical_paths[@]}"; do
-        if [[ ! -e "$DREAM_DIR/$path" ]]; then
-            log_warn "Missing after restore: $path"
-            all_good=false
-        fi
+    # Check that at least one compose file exists (base or standalone)
+    local has_compose=false
+    for f in "$DREAM_DIR"/docker-compose*.y*ml; do
+        [[ -f "$f" ]] && has_compose=true && break
     done
+    if [[ "$has_compose" == "false" ]]; then
+        log_warn "Missing after restore: no docker-compose*.yml files found"
+        all_good=false
+    fi
+    if [[ ! -d "$DREAM_DIR/data/open-webui" ]]; then
+        log_warn "Missing after restore: data/open-webui"
+        all_good=false
+    fi
 
     if [[ "$all_good" == "true" ]]; then
         log_success "Restore verification passed"
@@ -448,7 +462,12 @@ main() {
     fi
 
     # Check if running in Dream Server directory
-    if [[ ! -f "$DREAM_DIR/docker-compose.yml" && ! -d "$DREAM_DIR/data" ]]; then
+    # Check for any compose file (standalone or overlay) or data directory
+    local has_compose=false
+    for f in "$DREAM_DIR"/docker-compose*.y*ml; do
+        [[ -f "$f" ]] && has_compose=true && break
+    done
+    if [[ "$has_compose" == "false" && ! -d "$DREAM_DIR/data" ]]; then
         log_warn "This doesn't appear to be a Dream Server directory"
         log_warn "Expected: docker-compose.yml or data/ directory"
         read -rp "Continue anyway? [y/N] " confirm

@@ -227,7 +227,7 @@ log = logging.getLogger("token-monitor")
 
 TOKEN_SPY_API_KEY = os.environ.get("TOKEN_SPY_API_KEY", "")
 if not TOKEN_SPY_API_KEY:
-    _key_file = Path("/data/token-spy-api-key.txt")
+    _key_file = Path("/app/data/token-spy-api-key.txt")
     try:
         TOKEN_SPY_API_KEY = _key_file.read_text().strip()
     except FileNotFoundError:
@@ -321,7 +321,7 @@ async def _poll_remote_agents():
         try:
             # Poll remote agents (SSH-based)
             for agent in REMOTE_AGENTS:
-                status = _get_remote_session_status(agent)
+                status = await asyncio.to_thread(_get_remote_session_status, agent)
                 chars = status.get("current_history_chars", 0)
                 limit = get_agent_setting(agent, "session_char_limit")
                 if limit is None or limit <= 0:
@@ -610,6 +610,7 @@ async def _handle_streaming(client, raw_body, headers, model, sys_analysis,
 
     async def stream_and_capture():
         current_event = None
+        logged = False
         try:
             async with client.stream(
                 "POST", "/v1/messages",
@@ -654,13 +655,16 @@ async def _handle_streaming(client, raw_body, headers, model, sys_analysis,
                                 raw_body, usage, start_time,
                                 provider_name="anthropic",
                             )
+                            logged = True
         except httpx.HTTPStatusError as e:
             log.error(f"Upstream HTTP error: {e.response.status_code}")
             yield f"data: {json.dumps({'type': 'error', 'error': {'type': 'proxy_error', 'message': 'Upstream request failed'}})}\n\n"
         except Exception as e:
             log.error(f"Proxy stream error: {e}")
-            # Still try to log what we have
-            if usage["input_tokens"] > 0:
+        finally:
+            # Guarantee billing metrics are logged even on CancelledError
+            # (which is a BaseException and bypasses 'except Exception')
+            if not logged and usage["input_tokens"] > 0:
                 _log_entry(
                     model, sys_analysis, msg_analysis, tools,
                     raw_body, usage, start_time,
@@ -839,6 +843,7 @@ async def _handle_openai_streaming(client, raw_body, headers, model, sys_analysi
     }
 
     async def stream_and_capture():
+        logged = False
         try:
             async with client.stream(
                 "POST", "/v1/chat/completions",
@@ -866,6 +871,7 @@ async def _handle_openai_streaming(client, raw_body, headers, model, sys_analysi
                             provider_name="openai",
                             filter_result=filter_result,
                         )
+                        logged = True
                         continue
                     try:
                         data = json.loads(data_str)
@@ -890,7 +896,9 @@ async def _handle_openai_streaming(client, raw_body, headers, model, sys_analysi
             yield f"data: {json.dumps({'error': {'message': 'Upstream request failed', 'type': 'proxy_error'}})}\n\n"
         except Exception as e:
             log.error(f"Proxy stream error: {e}")
-            if usage["input_tokens"] > 0:
+        finally:
+            # Guarantee billing metrics are logged even on CancelledError
+            if not logged and usage["input_tokens"] > 0:
                 _log_entry(model, sys_analysis, msg_analysis, tools, raw_body, usage, start_time, provider_name="openai", filter_result=filter_result)
 
     return StreamingResponse(

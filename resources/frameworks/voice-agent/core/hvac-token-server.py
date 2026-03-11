@@ -17,12 +17,20 @@ from dotenv import load_dotenv
 
 load_dotenv(".env")
 
-API_KEY = os.getenv("LIVEKIT_API_KEY", "")
-API_SECRET = os.getenv("LIVEKIT_API_SECRET", "")
-LIVEKIT_URL = os.getenv("LIVEKIT_URL", "wss://grace-hvac-jtcdy0sb.livekit.cloud")
+# HVAC LiveKit credentials — read from environment variables.
+# Create a new project at https://cloud.livekit.io and set these:
+#   export LIVEKIT_API_KEY="your-api-key"
+#   export LIVEKIT_API_SECRET="your-api-secret"
+#   export LIVEKIT_URL="wss://your-project.livekit.cloud"
+API_KEY = os.getenv('LIVEKIT_API_KEY', '')
+API_SECRET = os.getenv('LIVEKIT_API_SECRET', '')
+LIVEKIT_URL = os.getenv('LIVEKIT_URL', 'wss://grace-hvac-jtcdy0sb.livekit.cloud')
 
 if not API_KEY or not API_SECRET:
-    raise ValueError("LIVEKIT_API_KEY and LIVEKIT_API_SECRET must be set in environment or .env file")
+    raise RuntimeError(
+        "LIVEKIT_API_KEY and LIVEKIT_API_SECRET must be set as environment variables. "
+        "Create a project at https://cloud.livekit.io to obtain credentials."
+    )
 
 def base64url_encode(data):
     """Base64URL encode without padding"""

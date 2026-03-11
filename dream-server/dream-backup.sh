@@ -20,6 +20,7 @@ NC='\033[0m' # No Color
 
 # Prerequisites check
 command -v rsync >/dev/null 2>&1 || { echo -e "${RED}Error: rsync is required but not installed.${NC}" >&2; echo "Install with: apt install rsync (Debian/Ubuntu) or brew install rsync (macOS)" >&2; exit 1; }
+command -v jq >/dev/null 2>&1 || { echo -e "${RED}Error: jq is required but not installed.${NC}" >&2; echo "Install with: apt install jq (Debian/Ubuntu) or brew install jq (macOS)" >&2; exit 1; }
 
 # Logging functions
 log_info() { echo -e "${BLUE}[INFO]${NC} $*"; }
@@ -67,7 +68,7 @@ list_backups() {
     local backups=()
     while IFS= read -r -d '' backup; do
         backups+=("$backup")
-    done < <(find "$BACKUP_ROOT" -maxdepth 1 -type d -name "*-*-*" -print0 2>/dev/null | sort -z -r)
+    done < <(find "$BACKUP_ROOT" -maxdepth 1 \( -type d -o -name "*.tar.gz" \) -name "*-*-*" -print0 2>/dev/null | sort -z -r)
 
     if [[ ${#backups[@]} -eq 0 ]]; then
         log_info "No backups found"
@@ -83,15 +84,24 @@ list_backups() {
     for backup in "${backups[@]}"; do
         local id
         id=$(basename "$backup")
-        local manifest="$backup/manifest.json"
         local backup_type="unknown"
         local description=""
         local size
         size=$(du -sh "$backup" 2>/dev/null | cut -f1)
 
-        if [[ -f "$manifest" ]]; then
-            backup_type=$(grep -o '"backup_type": "[^"]*"' "$manifest" 2>/dev/null | cut -d'"' -f4 || echo "unknown")
-            description=$(grep -o '"description": "[^"]*"' "$manifest" 2>/dev/null | cut -d'"' -f4 || echo "")
+        if [[ "$backup" == *.tar.gz ]]; then
+            # Compressed archive — extract manifest from inside the tar
+            local manifest_data
+            local archive_name="${id%.tar.gz}"
+            if manifest_data=$(tar xzf "$backup" -O "${archive_name}/manifest.json" 2>/dev/null); then
+                backup_type=$(echo "$manifest_data" | grep -o '"backup_type": "[^"]*"' 2>/dev/null | cut -d'"' -f4 || echo "compressed")
+                description=$(echo "$manifest_data" | grep -o '"description": "[^"]*"' 2>/dev/null | cut -d'"' -f4 || echo "")
+            else
+                backup_type="compressed"
+            fi
+        elif [[ -f "$backup/manifest.json" ]]; then
+            backup_type=$(grep -o '"backup_type": "[^"]*"' "$backup/manifest.json" 2>/dev/null | cut -d'"' -f4 || echo "unknown")
+            description=$(grep -o '"description": "[^"]*"' "$backup/manifest.json" 2>/dev/null | cut -d'"' -f4 || echo "")
         fi
 
         printf "%-20s %-12s %-10s %s\n" "$id" "$backup_type" "$size" "$description"
@@ -102,6 +112,13 @@ list_backups() {
 # Delete specific backup
 delete_backup() {
     local backup_id="$1"
+
+    # Reject path traversal attempts
+    if [[ "$backup_id" == *..* || "$backup_id" == */* || "$backup_id" == *\\* ]]; then
+        log_error "Invalid backup ID: $backup_id"
+        return 1
+    fi
+
     local backup_dir="$BACKUP_ROOT/$backup_id"
 
     if [[ ! -d "$backup_dir" ]]; then
@@ -126,31 +143,42 @@ create_manifest() {
     local version
     version=$(cat "$DREAM_DIR/.version" 2>/dev/null || echo "unknown")
 
-    cat > "$backup_dir/manifest.json" << EOF
-{
-  "manifest_version": "1.0",
-  "backup_date": "$(date -Iseconds)",
-  "backup_id": "$(basename "$backup_dir")",
-  "backup_type": "$backup_type",
-  "dream_version": "$version",
-  "hostname": "$(hostname)",
-  "description": "$description",
-  "contents": {
-    "user_data": $( [[ "$backup_type" == "full" || "$backup_type" == "user-data" ]] && echo "true" || echo "false" ),
-    "config": $( [[ "$backup_type" == "full" || "$backup_type" == "config" ]] && echo "true" || echo "false" ),
-    "cache": $( [[ "$backup_type" == "full" ]] && echo "true" || echo "false" )
-  },
-  "paths": {
-    "data_open_webui": "data/open-webui",
-    "data_n8n": "data/n8n",
-    "data_qdrant": "data/qdrant",
-    "data_openclaw": "data/openclaw",
-    "env": ".env",
-    "compose": "docker-compose.yml",
-    "config": "config"
-  }
-}
-EOF
+    # Use jq to safely construct JSON (prevents injection via $description)
+    local has_user_data="false" has_config="false" has_cache="false"
+    [[ "$backup_type" == "full" || "$backup_type" == "user-data" ]] && has_user_data="true"
+    [[ "$backup_type" == "full" || "$backup_type" == "config" ]] && has_config="true"
+    [[ "$backup_type" == "full" ]] && has_cache="true"
+
+    jq -n \
+        --arg mv "1.0" \
+        --arg bd "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+        --arg bi "$(basename "$backup_dir")" \
+        --arg bt "$backup_type" \
+        --arg dv "$version" \
+        --arg hn "$(hostname)" \
+        --arg desc "$description" \
+        --argjson ud "$has_user_data" \
+        --argjson cfg "$has_config" \
+        --argjson ca "$has_cache" \
+        '{
+          manifest_version: $mv,
+          backup_date: $bd,
+          backup_id: $bi,
+          backup_type: $bt,
+          dream_version: $dv,
+          hostname: $hn,
+          description: $desc,
+          contents: { user_data: $ud, config: $cfg, cache: $ca },
+          paths: {
+            data_open_webui: "data/open-webui",
+            data_n8n: "data/n8n",
+            data_qdrant: "data/qdrant",
+            data_openclaw: "data/openclaw",
+            env: ".env",
+            compose: "docker-compose.yml",
+            config: "config"
+          }
+        }' > "$backup_dir/manifest.json"
     log_info "Created backup manifest"
 }
 
@@ -187,21 +215,11 @@ backup_config() {
     local backup_dir="$1"
     log_info "Backing up configuration..."
 
-    # Essential config files
-    local config_files=(
-        ".env"
-        "docker-compose.yml"
-        ".version"
-        "dream-preflight.sh"
-        "dream-update.sh"
-    )
-
-    for file in "${config_files[@]}"; do
-        if [[ -f "$DREAM_DIR/$file" ]]; then
-            cp "$DREAM_DIR/$file" "$backup_dir/"
-            log_success "Backed up: $file"
-        else
-            log_warn "Skipped (not found): $file"
+    # Essential config files: discover compose overlays + dotfiles dynamically
+    for file in "$DREAM_DIR"/.env "$DREAM_DIR"/.version "$DREAM_DIR"/docker-compose*.y*ml "$DREAM_DIR"/dream-preflight.sh "$DREAM_DIR"/dream-update.sh; do
+        if [[ -f "$file" ]]; then
+            cp "$file" "$backup_dir/"
+            log_success "Backed up: $(basename "$file")"
         fi
     done
 
@@ -245,7 +263,7 @@ apply_retention() {
     local backups=()
     while IFS= read -r -d '' backup; do
         backups+=("$backup")
-    done < <(find "$BACKUP_ROOT" -maxdepth 1 -type d -name "*-*-*" -print0 2>/dev/null | sort -z -r)
+    done < <(find "$BACKUP_ROOT" -maxdepth 1 \( -type d -o -name "*.tar.gz" \) -name "*-*-*" -print0 2>/dev/null | sort -z -r)
 
     local count=${#backups[@]}
     if [[ $count -gt $RETENTION_COUNT ]]; then
@@ -397,7 +415,11 @@ main() {
     fi
 
     # Check if running in Dream Server directory
-    if [[ ! -f "$DREAM_DIR/docker-compose.yml" && ! -d "$DREAM_DIR/data" ]]; then
+    local has_compose=false
+    for f in "$DREAM_DIR"/docker-compose*.y*ml; do
+        [[ -f "$f" ]] && has_compose=true && break
+    done
+    if [[ "$has_compose" == "false" && ! -d "$DREAM_DIR/data" ]]; then
         log_warn "This doesn't appear to be a Dream Server directory"
         log_warn "Expected: docker-compose.yml or data/ directory"
         read -rp "Continue anyway? [y/N] " confirm
