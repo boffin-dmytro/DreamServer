@@ -14,39 +14,8 @@
 #   Add new developer tools or change installation methods here.
 # ============================================================================
 
-# ============================================================================
-# validate_installer_script: Verify downloaded script is safe to execute
-# ============================================================================
-# Args: $1 = file path, $2 = expected keyword (e.g., "node")
-# Returns: 0 if valid, 1 if suspicious
-validate_installer_script() {
-    local file="$1"
-    local keyword="$2"
-
-    # Check file exists and is readable
-    [[ ! -f "$file" || ! -r "$file" ]] && return 1
-
-    # Check file size (1KB - 100KB is reasonable for install scripts)
-    local size=$(stat -c%s "$file" 2>/dev/null || stat -f%z "$file" 2>/dev/null)
-    [[ -z "$size" || $size -lt 1000 || $size -gt 102400 ]] && return 1
-
-    # Check for HTML error page indicators
-    if head -n 20 "$file" | grep -qiE '<!DOCTYPE|<html|<title|<body'; then
-        return 1
-    fi
-
-    # Check for bash script indicators
-    if ! head -n 50 "$file" | grep -qE '#!/bin/(ba)?sh|^(set|if|for|while|function|echo|command)'; then
-        return 1
-    fi
-
-    # Check for expected keyword
-    if [[ -n "$keyword" ]] && ! grep -qi "$keyword" "$file"; then
-        return 1
-    fi
-
-    return 0
-}
+# Source validation library
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/validation.sh"
 
 if $DRY_RUN; then
     log "[DRY RUN] Would install AI developer tools (Claude Code, Codex CLI, OpenCode)"
@@ -60,15 +29,15 @@ else
         case "$PKG_MANAGER" in
             apt)
                 tmpfile=$(mktemp /tmp/nodesource-setup.XXXXXX.sh)
-                if curl -fsSL --max-time 300 https://deb.nodesource.com/setup_22.x -o "$tmpfile" 2>/dev/null; then
-                    if validate_installer_script "$tmpfile" "node"; then
-                        sudo -E bash "$tmpfile" >> "$LOG_FILE" 2>&1 || true
-                    else
-                        ai_warn "NodeSource script failed validation, skipping"
-                    fi
+
+                if ! curl -fsSL --max-time 300 https://deb.nodesource.com/setup_22.x -o "$tmpfile" 2>/dev/null; then
+                    ai_warn "Failed to download NodeSource setup script"
+                    rm -f "$tmpfile"
+                elif ! validate_installer_script "$tmpfile" "node"; then
+                    ai_warn "NodeSource script failed validation, skipping"
                     rm -f "$tmpfile"
                 else
-                    ai_warn "Failed to download NodeSource setup script"
+                    sudo -E bash "$tmpfile" >> "$LOG_FILE" 2>&1 || true
                     rm -f "$tmpfile"
                 fi
 
@@ -134,19 +103,18 @@ else
     if ! command -v opencode &> /dev/null && [[ ! -x "$HOME/.opencode/bin/opencode" ]]; then
         ai "Installing OpenCode..."
         tmpfile=$(mktemp /tmp/opencode-install.XXXXXX.sh)
-        if curl -fsSL --max-time 300 https://opencode.ai/install -o "$tmpfile" 2>/dev/null; then
-            if validate_installer_script "$tmpfile" "opencode"; then
-                if bash "$tmpfile" >> "$LOG_FILE" 2>&1; then
-                    ai_ok "OpenCode installed (~/.opencode/bin/opencode)"
-                else
-                    ai_warn "OpenCode install failed — install later with: curl -fsSL https://opencode.ai/install | bash"
-                fi
-            else
-                ai_warn "OpenCode script failed validation, skipping"
-            fi
+
+        if ! curl -fsSL --max-time 300 https://opencode.ai/install -o "$tmpfile" 2>/dev/null; then
+            ai_warn "Failed to download OpenCode installer"
+            rm -f "$tmpfile"
+        elif ! validate_installer_script "$tmpfile" "opencode"; then
+            ai_warn "OpenCode script failed validation, skipping"
+            rm -f "$tmpfile"
+        elif bash "$tmpfile" >> "$LOG_FILE" 2>&1; then
+            ai_ok "OpenCode installed (~/.opencode/bin/opencode)"
             rm -f "$tmpfile"
         else
-            ai_warn "Failed to download OpenCode installer"
+            ai_warn "OpenCode install failed — install later with: curl -fsSL https://opencode.ai/install | bash"
             rm -f "$tmpfile"
         fi
     else

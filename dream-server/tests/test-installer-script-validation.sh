@@ -34,36 +34,49 @@ info() {
 }
 
 # ============================================================================
-# Test 1: Phase 05 has validation function
+# Test 1: Validation library exists and is sourced
 # ============================================================================
-test_phase05_has_validation() {
-    info "Testing phase 05 has validate_installer_script function..."
+test_validation_library_exists() {
+    info "Testing validation library exists and is sourced..."
 
+    local validation_lib="$ROOT_DIR/installers/lib/validation.sh"
     local phase05="$ROOT_DIR/installers/phases/05-docker.sh"
+    local phase07="$ROOT_DIR/installers/phases/07-devtools.sh"
 
-    if ! grep -q "validate_installer_script()" "$phase05"; then
-        fail "phase 05 missing validate_installer_script function"
+    if [[ ! -f "$validation_lib" ]]; then
+        fail "validation library missing at installers/lib/validation.sh"
         return
     fi
 
-    if ! grep -q "validate_installer_script.*docker" "$phase05"; then
-        fail "phase 05 doesn't call validation with 'docker' keyword"
+    if ! grep -q "validate_installer_script()" "$validation_lib"; then
+        fail "validation library missing validate_installer_script function"
         return
     fi
 
-    pass "phase 05 has validate_installer_script function"
+    if ! grep -q "source.*lib/validation.sh" "$phase05"; then
+        fail "phase 05 doesn't source validation library"
+        return
+    fi
+
+    if ! grep -q "source.*lib/validation.sh" "$phase07"; then
+        fail "phase 07 doesn't source validation library"
+        return
+    fi
+
+    pass "validation library exists and is sourced by phases"
 }
 
 # ============================================================================
-# Test 2: Phase 07 has validation function
+# Test 2: Phases call validation with correct keywords
 # ============================================================================
-test_phase07_has_validation() {
-    info "Testing phase 07 has validate_installer_script function..."
+test_phases_call_validation() {
+    info "Testing phases call validation with correct keywords..."
 
+    local phase05="$ROOT_DIR/installers/phases/05-docker.sh"
     local phase07="$ROOT_DIR/installers/phases/07-devtools.sh"
 
-    if ! grep -q "validate_installer_script()" "$phase07"; then
-        fail "phase 07 missing validate_installer_script function"
+    if ! grep -q "validate_installer_script.*docker" "$phase05"; then
+        fail "phase 05 doesn't call validation with 'docker' keyword"
         return
     fi
 
@@ -77,29 +90,41 @@ test_phase07_has_validation() {
         return
     fi
 
-    pass "phase 07 has validate_installer_script function"
+    pass "phases call validation with correct keywords"
 }
 
 # ============================================================================
-# Test 3: Phases use trap handlers for cleanup
+# Test 3: Phases clean up temp files explicitly
 # ============================================================================
-test_trap_handlers() {
-    info "Testing phases use trap handlers for temp file cleanup..."
+test_temp_file_cleanup() {
+    info "Testing phases clean up temp files explicitly..."
 
     local phase05="$ROOT_DIR/installers/phases/05-docker.sh"
     local phase07="$ROOT_DIR/installers/phases/07-devtools.sh"
 
-    if ! grep -q "trap.*rm.*tmpfile.*EXIT" "$phase05"; then
-        fail "phase 05 missing trap handler for temp file cleanup"
+    # Check that phases clean up temp files (explicit rm -f, not trap)
+    if ! grep -q "rm -f.*tmpfile" "$phase05"; then
+        fail "phase 05 missing temp file cleanup"
         return
     fi
 
-    if ! grep -q "trap.*rm.*tmpfile.*EXIT" "$phase07"; then
-        fail "phase 07 missing trap handler for temp file cleanup"
+    if ! grep -q "rm -f.*tmpfile" "$phase07"; then
+        fail "phase 07 missing temp file cleanup"
         return
     fi
 
-    pass "phases use trap handlers for cleanup"
+    # Verify no EXIT traps that could override parent traps
+    if grep -q "trap.*EXIT" "$phase05"; then
+        fail "phase 05 uses EXIT trap (should use explicit cleanup instead)"
+        return
+    fi
+
+    if grep -q "trap.*EXIT" "$phase07"; then
+        fail "phase 07 uses EXIT trap (should use explicit cleanup instead)"
+        return
+    fi
+
+    pass "phases clean up temp files explicitly without trap override risk"
 }
 
 # ============================================================================
@@ -180,8 +205,8 @@ command -v docker || echo "Docker not found"
 # ============================================================================
 EOF
 
-    # Source the validation function from phase 05
-    source <(grep -A 30 "validate_installer_script()" "$ROOT_DIR/installers/phases/05-docker.sh" | grep -B 30 "^}")
+    # Source the validation function from the validation library
+    source "$ROOT_DIR/installers/lib/validation.sh"
 
     if ! validate_installer_script "$test_script" "docker"; then
         fail "validation rejected valid bash script with keyword"
@@ -260,9 +285,9 @@ echo "Installer Script Validation Tests"
 echo "============================================"
 echo ""
 
-test_phase05_has_validation
-test_phase07_has_validation
-test_trap_handlers
+test_validation_library_exists
+test_phases_call_validation
+test_temp_file_cleanup
 test_curl_timeouts
 test_validation_logic
 test_error_messages
