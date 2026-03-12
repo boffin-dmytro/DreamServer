@@ -78,24 +78,45 @@ else
 
             # Retry loop: up to 3 attempts with resume support (-c flag)
             _dl_success=false
+            _last_error=""
             for _attempt in 1 2 3; do
                 [[ $_attempt -gt 1 ]] && ai "Retry attempt $_attempt of 3..."
+
+                # Capture error output from wget
+                _error_log=$(mktemp)
                 wget -c -q -O "$GGUF_DIR/$GGUF_FILE.part" "$GGUF_URL" \
-                    >> "$INSTALL_DIR/logs/model-download.log" 2>&1 &
+                    >> "$INSTALL_DIR/logs/model-download.log" 2>"$_error_log" &
                 dl_pid=$!
 
                 if spin_task $dl_pid "Downloading $GGUF_FILE"; then
                     mv "$GGUF_DIR/$GGUF_FILE.part" "$GGUF_DIR/$GGUF_FILE"
                     printf "\r  ${BGRN}✓${NC} %-60s\n" "Model downloaded: $GGUF_FILE"
                     _dl_success=true
+                    rm -f "$_error_log"
                     break
                 fi
+
+                # Capture last error for diagnostics
+                _last_error=$(cat "$_error_log" 2>/dev/null | tail -3 | head -1)
+                rm -f "$_error_log"
                 printf "\r  ${AMB}⚠${NC} %-60s\n" "Download attempt $_attempt failed"
                 sleep 3
             done
 
             if [[ "$_dl_success" != "true" ]]; then
                 printf "\r  ${RED}✗${NC} %-60s\n" "Download failed after 3 attempts: $GGUF_FILE"
+
+                # Show last error if captured
+                if [[ -n "$_last_error" ]]; then
+                    ai "Last error: $_last_error"
+                fi
+
+                # Suggest troubleshooting steps
+                ai "Troubleshooting:"
+                ai "  1. Check network connectivity: ping -c 3 huggingface.co"
+                ai "  2. Check disk space: df -h $GGUF_DIR"
+                ai "  3. Check download log: tail -20 $INSTALL_DIR/logs/model-download.log"
+                ai ""
                 ai "Manual retry: wget -c -O '$GGUF_DIR/$GGUF_FILE.part' '$GGUF_URL' && mv '$GGUF_DIR/$GGUF_FILE.part' '$GGUF_DIR/$GGUF_FILE'"
             else
                 # Verify freshly downloaded file
