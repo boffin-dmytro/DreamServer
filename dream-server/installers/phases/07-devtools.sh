@@ -14,6 +14,40 @@
 #   Add new developer tools or change installation methods here.
 # ============================================================================
 
+# ============================================================================
+# validate_installer_script: Verify downloaded script is safe to execute
+# ============================================================================
+# Args: $1 = file path, $2 = expected keyword (e.g., "node")
+# Returns: 0 if valid, 1 if suspicious
+validate_installer_script() {
+    local file="$1"
+    local keyword="$2"
+
+    # Check file exists and is readable
+    [[ ! -f "$file" || ! -r "$file" ]] && return 1
+
+    # Check file size (1KB - 100KB is reasonable for install scripts)
+    local size=$(stat -c%s "$file" 2>/dev/null || stat -f%z "$file" 2>/dev/null)
+    [[ -z "$size" || $size -lt 1000 || $size -gt 102400 ]] && return 1
+
+    # Check for HTML error page indicators
+    if head -n 20 "$file" | grep -qiE '<!DOCTYPE|<html|<title|<body'; then
+        return 1
+    fi
+
+    # Check for bash script indicators
+    if ! head -n 50 "$file" | grep -qE '#!/bin/(ba)?sh|^(set|if|for|while|function|echo|command)'; then
+        return 1
+    fi
+
+    # Check for expected keyword
+    if [[ -n "$keyword" ]] && ! grep -qi "$keyword" "$file"; then
+        return 1
+    fi
+
+    return 0
+}
+
 if $DRY_RUN; then
     log "[DRY RUN] Would install AI developer tools (Claude Code, Codex CLI, OpenCode)"
     log "[DRY RUN] Would configure OpenCode for local llama-server (user-level systemd service on port 3003)"
@@ -27,9 +61,17 @@ else
             apt)
                 tmpfile=$(mktemp /tmp/nodesource-setup.XXXXXX.sh)
                 if curl -fsSL --max-time 300 https://deb.nodesource.com/setup_22.x -o "$tmpfile" 2>/dev/null; then
-                    sudo -E bash "$tmpfile" >> "$LOG_FILE" 2>&1 || true
+                    if validate_installer_script "$tmpfile" "node"; then
+                        sudo -E bash "$tmpfile" >> "$LOG_FILE" 2>&1 || true
+                    else
+                        ai_warn "NodeSource script failed validation, skipping"
+                    fi
+                    rm -f "$tmpfile"
+                else
+                    ai_warn "Failed to download NodeSource setup script"
+                    rm -f "$tmpfile"
                 fi
-                rm -f "$tmpfile"
+
                 sudo apt-get install -y nodejs >> "$LOG_FILE" 2>&1 || true
                 ;;
             dnf)
@@ -50,7 +92,9 @@ else
     fi
 
     if command -v npm &> /dev/null; then
-        # Set up user-level npm global prefix (no sudo needed)
+        ai_ok "Node.js available: $(node --version 2>/dev/null || echo 'version unknown')"
+
+        # Set up user-level npm global directory (avoids sudo for npm installs)
         NPM_GLOBAL_DIR="$HOME/.npm-global"
         if [[ ! -d "$NPM_GLOBAL_DIR" ]]; then
             mkdir -p "$NPM_GLOBAL_DIR"
@@ -83,20 +127,28 @@ else
             ai "Added ~/.npm-global/bin to PATH in ~/.bashrc"
         fi
     else
-        ai_warn "npm not available — skipping Claude Code and Codex CLI install"
-        ai "  Install later: npm i -g @anthropic-ai/claude-code @openai/codex"
+        ai_warn "Node.js not available — skipping Claude Code and Codex CLI"
     fi
 
     # ── OpenCode (local agentic coding platform) ──
     if ! command -v opencode &> /dev/null && [[ ! -x "$HOME/.opencode/bin/opencode" ]]; then
         ai "Installing OpenCode..."
         tmpfile=$(mktemp /tmp/opencode-install.XXXXXX.sh)
-        if curl -fsSL --max-time 300 https://opencode.ai/install -o "$tmpfile" 2>/dev/null && bash "$tmpfile" >> "$LOG_FILE" 2>&1; then
-            ai_ok "OpenCode installed (~/.opencode/bin/opencode)"
+        if curl -fsSL --max-time 300 https://opencode.ai/install -o "$tmpfile" 2>/dev/null; then
+            if validate_installer_script "$tmpfile" "opencode"; then
+                if bash "$tmpfile" >> "$LOG_FILE" 2>&1; then
+                    ai_ok "OpenCode installed (~/.opencode/bin/opencode)"
+                else
+                    ai_warn "OpenCode install failed — install later with: curl -fsSL https://opencode.ai/install | bash"
+                fi
+            else
+                ai_warn "OpenCode script failed validation, skipping"
+            fi
+            rm -f "$tmpfile"
         else
-            ai_warn "OpenCode install failed — install later with: curl -fsSL https://opencode.ai/install | bash"
+            ai_warn "Failed to download OpenCode installer"
+            rm -f "$tmpfile"
         fi
-        rm -f "$tmpfile"
     else
         ai_ok "OpenCode already installed"
     fi
@@ -152,25 +204,19 @@ OPENCODE_EOF
                 OPENCODE_SERVER_PASSWORD=$(grep -m1 '^OPENCODE_SERVER_PASSWORD=' "$INSTALL_DIR/.env" | cut -d= -f2-)
             fi
 
-            svc_tmp="/tmp/opencode-web.service.$$"
-            cp "$INSTALL_DIR/opencode/opencode-web.service" "$svc_tmp"
-            # Escape sed special chars to prevent injection from path or password values
-            _home_esc=$(printf '%s\n' "$HOME" | sed 's/[&/\]/\\&/g')
-            _pass_esc=$(printf '%s\n' "${OPENCODE_SERVER_PASSWORD}" | sed 's/[&/\]/\\&/g')
-            sed -i "s|__HOME__|${_home_esc}|g" "$svc_tmp"
-            sed -i "s|__OPENCODE_SERVER_PASSWORD__|${_pass_esc}|g" "$svc_tmp"
-            cp "$svc_tmp" "$SYSTEMD_USER_DIR/opencode-web.service"
-            rm -f "$svc_tmp"
+            # Substitute environment variables in the service file
+            sed -e "s|{{INSTALL_DIR}}|$INSTALL_DIR|g" \
+                -e "s|{{OPENCODE_SERVER_PASSWORD}}|$OPENCODE_SERVER_PASSWORD|g" \
+                "$INSTALL_DIR/opencode/opencode-web.service" > "$SYSTEMD_USER_DIR/opencode-web.service"
 
-            systemctl --user daemon-reload 2>/dev/null || true
-            systemctl --user enable --now opencode-web.service >> "$LOG_FILE" 2>&1 && \
-                ai_ok "OpenCode Web UI service installed (user-level, port 3003)" || \
-                ai_warn "OpenCode Web UI service failed to start"
+            systemctl --user daemon-reload
+            systemctl --user enable opencode-web.service
+            systemctl --user start opencode-web.service
 
-            # Enable lingering so service survives logout
-            loginctl enable-linger "$(whoami)" 2>/dev/null || \
-                sudo -n loginctl enable-linger "$(whoami)" 2>/dev/null || \
-                ai_warn "Could not enable linger. OpenCode may stop after logout. Run: loginctl enable-linger $(whoami)"
+            ai_ok "OpenCode Web UI installed as systemd user service (port 3003)"
+            ai "  Start: systemctl --user start opencode-web"
+            ai "  Stop:  systemctl --user stop opencode-web"
+            ai "  Logs:  journalctl --user -u opencode-web -f"
         fi
     fi
 fi
