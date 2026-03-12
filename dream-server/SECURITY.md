@@ -205,10 +205,10 @@ The installer validates external scripts before execution to prevent:
 1. Downloads script to temporary file with 5-minute timeout
 2. Validates script content (size, format, expected keywords)
 3. Executes only if validation passes
-4. Guarantees cleanup with trap handlers
+4. Cleans up temporary files in all code paths
 
 **Validation checks:**
-- File size is reasonable (1KB - 100KB)
+- File size is reasonable (1KB - 200KB)
 - Content is valid bash (not HTML error page)
 - Contains expected keywords (e.g., "docker" for Docker installer)
 - Script has proper bash indicators (shebang, common commands)
@@ -217,6 +217,11 @@ The installer validates external scripts before execution to prevent:
 - Docker installation script (https://get.docker.com)
 - NodeSource setup script (https://deb.nodesource.com/setup_22.x)
 - OpenCode installation script (https://opencode.ai/install)
+
+**Implementation:**
+- Shared validation function in `installers/lib/validation.sh`
+- Explicit cleanup in all code paths (no trap override risk)
+- Fixed-string keyword matching for robustness
 
 **If validation fails:**
 ```bash
