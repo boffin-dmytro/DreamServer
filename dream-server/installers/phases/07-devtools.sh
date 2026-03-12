@@ -14,6 +14,40 @@
 #   Add new developer tools or change installation methods here.
 # ============================================================================
 
+# ============================================================================
+# validate_installer_script: Verify downloaded script is safe to execute
+# ============================================================================
+# Args: $1 = file path, $2 = expected keyword (e.g., "node")
+# Returns: 0 if valid, 1 if suspicious
+validate_installer_script() {
+    local file="$1"
+    local keyword="$2"
+
+    # Check file exists and is readable
+    [[ ! -f "$file" || ! -r "$file" ]] && return 1
+
+    # Check file size (1KB - 100KB is reasonable for install scripts)
+    local size=$(stat -c%s "$file" 2>/dev/null || stat -f%z "$file" 2>/dev/null)
+    [[ -z "$size" || $size -lt 1000 || $size -gt 102400 ]] && return 1
+
+    # Check for HTML error page indicators
+    if head -n 20 "$file" | grep -qiE '<!DOCTYPE|<html|<title|<body'; then
+        return 1
+    fi
+
+    # Check for bash script indicators
+    if ! head -n 50 "$file" | grep -qE '#!/bin/(ba)?sh|^(set|if|for|while|function|echo|command)'; then
+        return 1
+    fi
+
+    # Check for expected keyword
+    if [[ -n "$keyword" ]] && ! grep -qi "$keyword" "$file"; then
+        return 1
+    fi
+
+    return 0
+}
+
 if $DRY_RUN; then
     log "[DRY RUN] Would install AI developer tools (Claude Code, Codex CLI, OpenCode)"
     log "[DRY RUN] Would configure OpenCode for local llama-server (user-level systemd service on port 3003)"
@@ -26,10 +60,22 @@ else
         case "$PKG_MANAGER" in
             apt)
                 tmpfile=$(mktemp /tmp/nodesource-setup.XXXXXX.sh)
-                if curl -fsSL https://deb.nodesource.com/setup_22.x -o "$tmpfile" 2>/dev/null; then
+                trap 'rm -f "$tmpfile"' EXIT
+
+                if ! curl -fsSL --max-time 300 https://deb.nodesource.com/setup_22.x -o "$tmpfile" 2>/dev/null; then
+                    ai_warn "Failed to download NodeSource setup script"
+                    trap - EXIT
+                    rm -f "$tmpfile"
+                elif ! validate_installer_script "$tmpfile" "node"; then
+                    ai_warn "NodeSource script failed validation, skipping"
+                    trap - EXIT
+                    rm -f "$tmpfile"
+                else
                     sudo -E bash "$tmpfile" >> "$LOG_FILE" 2>&1 || true
+                    trap - EXIT
+                    rm -f "$tmpfile"
                 fi
-                rm -f "$tmpfile"
+
                 sudo apt-get install -y nodejs >> "$LOG_FILE" 2>&1 || true
                 ;;
             dnf)
@@ -91,12 +137,25 @@ else
     if ! command -v opencode &> /dev/null && [[ ! -x "$HOME/.opencode/bin/opencode" ]]; then
         ai "Installing OpenCode..."
         tmpfile=$(mktemp /tmp/opencode-install.XXXXXX.sh)
-        if curl -fsSL https://opencode.ai/install -o "$tmpfile" 2>/dev/null && bash "$tmpfile" >> "$LOG_FILE" 2>&1; then
+        trap 'rm -f "$tmpfile"' EXIT
+
+        if ! curl -fsSL --max-time 300 https://opencode.ai/install -o "$tmpfile" 2>/dev/null; then
+            ai_warn "Failed to download OpenCode installer"
+            trap - EXIT
+            rm -f "$tmpfile"
+        elif ! validate_installer_script "$tmpfile" "opencode"; then
+            ai_warn "OpenCode script failed validation, skipping"
+            trap - EXIT
+            rm -f "$tmpfile"
+        elif bash "$tmpfile" >> "$LOG_FILE" 2>&1; then
             ai_ok "OpenCode installed (~/.opencode/bin/opencode)"
+            trap - EXIT
+            rm -f "$tmpfile"
         else
             ai_warn "OpenCode install failed — install later with: curl -fsSL https://opencode.ai/install | bash"
+            trap - EXIT
+            rm -f "$tmpfile"
         fi
-        rm -f "$tmpfile"
     else
         ai_ok "OpenCode already installed"
     fi

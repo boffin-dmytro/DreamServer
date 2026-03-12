@@ -194,6 +194,41 @@ grep -A 2 "Qwen3-8B" installers/lib/tier-map.sh | grep GGUF_SHA256
 
 **Note:** Some models (like Qwen3-14B and qwen3-coder-next) don't have checksums yet. The installer will skip verification for these but still download them successfully.
 
+### Installer Script Validation
+
+The installer validates external scripts before execution to prevent:
+- Corrupted downloads from network issues
+- HTML error pages being executed as bash
+- Malformed or suspicious scripts
+
+**How it works:**
+1. Downloads script to temporary file with 5-minute timeout
+2. Validates script content (size, format, expected keywords)
+3. Executes only if validation passes
+4. Guarantees cleanup with trap handlers
+
+**Validation checks:**
+- File size is reasonable (1KB - 100KB)
+- Content is valid bash (not HTML error page)
+- Contains expected keywords (e.g., "docker" for Docker installer)
+- Script has proper bash indicators (shebang, common commands)
+
+**Scripts validated:**
+- Docker installation script (https://get.docker.com)
+- NodeSource setup script (https://deb.nodesource.com/setup_22.x)
+- OpenCode installation script (https://opencode.ai/install)
+
+**If validation fails:**
+```bash
+# The installer will show:
+# ✗ Downloaded Docker script failed validation (may be corrupted or an error page).
+
+# Check your network connection and try again:
+./install.sh
+```
+
+**Note:** Validation is content-based (not checksum-based) because these scripts update frequently. This provides protection against common issues while allowing legitimate updates.
+
 ---
 
 ## API Security

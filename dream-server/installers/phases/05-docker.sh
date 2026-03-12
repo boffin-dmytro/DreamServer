@@ -19,6 +19,40 @@
 show_phase 3 6 "Docker Setup" "~2 minutes"
 ai "Preparing container runtime..."
 
+# ============================================================================
+# validate_installer_script: Verify downloaded script is safe to execute
+# ============================================================================
+# Args: $1 = file path, $2 = expected keyword (e.g., "docker")
+# Returns: 0 if valid, 1 if suspicious
+validate_installer_script() {
+    local file="$1"
+    local keyword="$2"
+
+    # Check file exists and is readable
+    [[ ! -f "$file" || ! -r "$file" ]] && return 1
+
+    # Check file size (1KB - 100KB is reasonable for install scripts)
+    local size=$(stat -c%s "$file" 2>/dev/null || stat -f%z "$file" 2>/dev/null)
+    [[ -z "$size" || $size -lt 1000 || $size -gt 102400 ]] && return 1
+
+    # Check for HTML error page indicators
+    if head -n 20 "$file" | grep -qiE '<!DOCTYPE|<html|<title|<body'; then
+        return 1
+    fi
+
+    # Check for bash script indicators
+    if ! head -n 50 "$file" | grep -qE '#!/bin/(ba)?sh|^(set|if|for|while|function|echo|command)'; then
+        return 1
+    fi
+
+    # Check for expected keyword
+    if [[ -n "$keyword" ]] && ! grep -qi "$keyword" "$file"; then
+        return 1
+    fi
+
+    return 0
+}
+
 # Ensure package manager is detected
 [[ -z "$PKG_MANAGER" ]] && detect_pkg_manager
 
@@ -33,10 +67,21 @@ else
         log "[DRY RUN] Would install Docker via official script"
     else
         tmpfile=$(mktemp /tmp/install-docker.XXXXXX.sh)
-        if ! curl -fsSL https://get.docker.com -o "$tmpfile" || ! sh "$tmpfile"; then
-            rm -f "$tmpfile"
-            error "Docker installation failed. Check network connectivity and try again."
+        trap 'rm -f "$tmpfile"' EXIT
+
+        if ! curl -fsSL --max-time 300 https://get.docker.com -o "$tmpfile"; then
+            error "Failed to download Docker installation script. Check network connectivity."
         fi
+
+        if ! validate_installer_script "$tmpfile" "docker"; then
+            error "Downloaded Docker script failed validation (may be corrupted or an error page)."
+        fi
+
+        if ! sh "$tmpfile"; then
+            error "Docker installation failed. Check logs for details."
+        fi
+
+        trap - EXIT
         rm -f "$tmpfile"
         sudo usermod -aG docker $USER
 
