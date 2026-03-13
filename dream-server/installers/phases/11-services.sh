@@ -79,16 +79,36 @@ else
             # Retry loop: up to 3 attempts with resume support (-c flag)
             _dl_success=false
             _last_error=""
+
+            # Ensure temporary error logs get cleaned up even if the installer is interrupted.
+            if [[ -z "${_MODEL_DL_CLEANUP_INSTALLED:-}" ]]; then
+                _MODEL_DL_CLEANUP_INSTALLED=true
+                _MODEL_DL_TMPFILES=()
+                _model_dl_cleanup() {
+                    local f
+                    for f in "${_MODEL_DL_TMPFILES[@]:-}"; do
+                        rm -f "$f" 2>/dev/null || true
+                    done
+                }
+                # Don't override install-core.sh's SIGINT handler.
+                trap _model_dl_cleanup EXIT
+                # Ensure we still cleanup temp files if the user aborts.
+                trap '_model_dl_cleanup; interrupt_handler' INT
+            fi
+
             for _attempt in 1 2 3; do
                 [[ $_attempt -gt 1 ]] && ai "Retry attempt $_attempt of 3..."
 
-                # Capture error output from wget
+                # Capture stderr to a temp file (for the user-facing error summary) AND to the main log.
                 _error_log=$(mktemp)
+                _MODEL_DL_TMPFILES+=("$_error_log")
+
                 wget -c -q -O "$GGUF_DIR/$GGUF_FILE.part" "$GGUF_URL" \
-                    >> "$INSTALL_DIR/logs/model-download.log" 2>"$_error_log" &
+                    >> "$INSTALL_DIR/logs/model-download.log" \
+                    2> >(tee -a "$INSTALL_DIR/logs/model-download.log" >"$_error_log") &
                 dl_pid=$!
 
-                if spin_task $dl_pid "Downloading $GGUF_FILE"; then
+                if spin_task "$dl_pid" "Downloading $GGUF_FILE"; then
                     mv "$GGUF_DIR/$GGUF_FILE.part" "$GGUF_DIR/$GGUF_FILE"
                     printf "\r  ${BGRN}✓${NC} %-60s\n" "Model downloaded: $GGUF_FILE"
                     _dl_success=true
@@ -96,8 +116,8 @@ else
                     break
                 fi
 
-                # Capture last error for diagnostics
-                _last_error=$(cat "$_error_log" 2>/dev/null | tail -3 | head -1)
+                # Capture a stable, human-readable error line for diagnostics.
+                _last_error=$(grep -v '^[[:space:]]*$' "$_error_log" 2>/dev/null | tail -n 1)
                 rm -f "$_error_log"
                 printf "\r  ${AMB}⚠${NC} %-60s\n" "Download attempt $_attempt failed"
                 sleep 3
@@ -113,11 +133,11 @@ else
 
                 # Suggest troubleshooting steps
                 ai "Troubleshooting:"
-                ai "  1. Check network connectivity: ping -c 3 huggingface.co"
-                ai "  2. Check disk space: df -h $GGUF_DIR"
-                ai "  3. Check download log: tail -20 $INSTALL_DIR/logs/model-download.log"
+                ai "  • If this looks like a network/DNS issue, check your internet connection or firewall/VPN settings, then retry."
+                ai "  • If the error mentions disk space, free up space in: $GGUF_DIR"
+                ai "  • For the full download output, run: tail -20 $INSTALL_DIR/logs/model-download.log"
                 ai ""
-                ai "Manual retry: wget -c -O '$GGUF_DIR/$GGUF_FILE.part' '$GGUF_URL' && mv '$GGUF_DIR/$GGUF_FILE.part' '$GGUF_DIR/$GGUF_FILE'"
+                ai "Manual retry (advanced): wget -c -O '$GGUF_DIR/$GGUF_FILE.part' '$GGUF_URL' && mv '$GGUF_DIR/$GGUF_FILE.part' '$GGUF_DIR/$GGUF_FILE'"
             else
                 # Verify freshly downloaded file
                 if [[ -n "$GGUF_SHA256" ]]; then
