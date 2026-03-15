@@ -17,6 +17,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Docs Link Checks
+        run: bash tests/test-doc-links.sh
+
       - name: Integration Smoke
         run: bash tests/integration-test.sh
 
