@@ -39,7 +39,18 @@ if [[ "$ENV_MODE" == "true" ]]; then
 import json
 import sys
 
-contract = json.load(open(sys.argv[1], "r", encoding="utf-8"))
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as f:
+        contract = json.load(f)
+except json.JSONDecodeError as e:
+    print(f"ERROR: Invalid JSON in backend contract: {e}", file=sys.stderr)
+    sys.exit(1)
+except FileNotFoundError:
+    print(f"ERROR: Backend contract file not found: {sys.argv[1]}", file=sys.stderr)
+    sys.exit(1)
+except Exception as e:
+    print(f"ERROR: Failed to load backend contract: {e}", file=sys.stderr)
+    sys.exit(1)
 
 def out(key, value):
     safe = str(value).replace("\\", "\\\\").replace('"', '\\"')
