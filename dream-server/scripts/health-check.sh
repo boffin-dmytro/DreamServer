@@ -117,6 +117,7 @@ test_service() {
     local port_env="${SERVICE_PORT_ENVS[$sid]}"
     local default_port="${SERVICE_PORTS[$sid]}"
     local health="${SERVICE_HEALTH[$sid]}"
+    local timeout="${SERVICE_HEALTH_TIMEOUTS[$sid]:-$TIMEOUT}"
 
     # Resolve port
     local port="$default_port"
@@ -124,7 +125,7 @@ test_service() {
 
     [[ -z "$health" || "$port" == "0" ]] && return 1
 
-    if curl -sf --max-time $TIMEOUT "http://localhost:${port}${health}" >/dev/null 2>&1; then
+    if curl -sf --max-time "$timeout" "http://localhost:${port}${health}" >/dev/null 2>&1; then
         result_set "$sid" "ok"
         return 0
     fi
