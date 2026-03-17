@@ -63,7 +63,7 @@ print_menu() {
 check_service() {
     local url=$1
     local endpoint=$2
-    curl -sf "${url}${endpoint}" > /dev/null 2>&1
+    curl -sf --max-time 10 "${url}${endpoint}" > /dev/null 2>&1
 }
 
 demo_chat() {
@@ -94,8 +94,8 @@ demo_chat() {
         fi
         
         echo -ne "${CYAN}AI: ${NC}"
-        
-        response=$(curl -sf "${LLM_URL}/v1/chat/completions" \
+
+        response=$(curl -sf --max-time 30 "${LLM_URL}/v1/chat/completions" \
             -H "Content-Type: application/json" \
             -d "$(jq -n --arg msg "$user_input" '{
                 model: "local",
@@ -213,9 +213,9 @@ demo_rag() {
         fi
         
         echo -ne "${CYAN}Answer: ${NC}"
-        
+
         # Use document as context
-        response=$(curl -sf "${LLM_URL}/v1/chat/completions" \
+        response=$(curl -sf --max-time 30 "${LLM_URL}/v1/chat/completions" \
             -H "Content-Type: application/json" \
             -d "$(jq -n --arg doc "$DOC_CONTENT" --arg q "$question" '{
                 model: "local",
@@ -286,8 +286,8 @@ demo_code() {
     echo ""
     
     prompt="Task: $task\n\nCode:\n\`\`\`\n$CODE\n\`\`\`"
-    
-    response=$(curl -sf "${LLM_URL}/v1/chat/completions" \
+
+    response=$(curl -sf --max-time 30 "${LLM_URL}/v1/chat/completions" \
         -H "Content-Type: application/json" \
         -d "$(jq -n --arg p "$prompt" '{
             model: "local",
