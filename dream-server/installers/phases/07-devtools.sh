@@ -14,6 +14,16 @@
 #   Add new developer tools or change installation methods here.
 # ============================================================================
 
+PHASE_TEMP_FILES=()
+cleanup_phase() {
+    local exit_code=$?
+    for f in "${PHASE_TEMP_FILES[@]}"; do
+        [[ -f "$f" ]] && rm -f "$f"
+    done
+    return $exit_code
+}
+trap cleanup_phase EXIT ERR
+
 dream_progress 42 "devtools" "Installing developer tools"
 if $DRY_RUN; then
     log "[DRY RUN] Would install AI developer tools (Claude Code, Codex CLI, OpenCode)"
@@ -27,10 +37,10 @@ else
         case "$PKG_MANAGER" in
             apt)
                 tmpfile=$(mktemp /tmp/nodesource-setup.XXXXXX.sh)
+                PHASE_TEMP_FILES+=("$tmpfile")
                 if curl -fsSL --max-time 300 https://deb.nodesource.com/setup_22.x -o "$tmpfile" 2>/dev/null; then
                     sudo -E bash "$tmpfile" 2>&1 | tee -a "$LOG_FILE" || true
                 fi
-                rm -f "$tmpfile"
                 sudo apt-get install -y nodejs 2>&1 | tee -a "$LOG_FILE" || true
                 ;;
             dnf)

@@ -16,6 +16,16 @@
 #   Multi-distro: uses packaging.sh for distro-agnostic package installs.
 # ============================================================================
 
+PHASE_TEMP_FILES=()
+cleanup_phase() {
+    local exit_code=$?
+    for f in "${PHASE_TEMP_FILES[@]}"; do
+        [[ -f "$f" ]] && rm -f "$f"
+    done
+    return $exit_code
+}
+trap cleanup_phase EXIT ERR
+
 dream_progress 30 "docker" "Setting up Docker"
 show_phase 3 6 "Docker Setup" "~2 minutes"
 ai "Preparing container runtime..."
@@ -58,11 +68,10 @@ else
         log "[DRY RUN] Would install Docker via official script"
     else
         tmpfile=$(mktemp /tmp/install-docker.XXXXXX.sh)
+        PHASE_TEMP_FILES+=("$tmpfile")
         if ! curl -fsSL --max-time 300 https://get.docker.com -o "$tmpfile" || ! sh "$tmpfile"; then
-            rm -f "$tmpfile"
             error "Docker installation failed. Check network connectivity and try again."
         fi
-        rm -f "$tmpfile"
 
         # Add the invoking user (not root) to the docker group
         target_user="${SUDO_USER:-$USER}"
