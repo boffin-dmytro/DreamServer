@@ -21,7 +21,7 @@
 #   shortcut here.
 # ============================================================================
 
-dream_progress 98 "summary" "Finishing up"
+set -euo pipefail
 
 # Source service registry for port resolution
 . "$SCRIPT_DIR/lib/service-registry.sh"
@@ -81,7 +81,7 @@ echo "  • Chat UI:       http://localhost:${SERVICE_PORTS[open-webui]:-3000}"
 echo "  • Dashboard:     http://localhost:${SERVICE_PORTS[dashboard]:-3001}"
 echo "  • Perplexica:    http://localhost:${SERVICE_PORTS[perplexica]:-3004}"
 echo "  • ComfyUI:       http://localhost:${SERVICE_PORTS[comfyui]:-8188}"
-echo "  • LLM API:       http://localhost:${SERVICE_PORTS[llama-server]:-11434}/v1  (llama-server)"
+echo "  • LLM API:       http://localhost:${SERVICE_PORTS[llama-server]:-8080}/v1  (llama-server)"
 [[ "$ENABLE_OPENCLAW" == "true" ]] && echo "  • OpenClaw:      http://localhost:${SERVICE_PORTS[openclaw]:-7860}"
 systemctl --user is-active opencode-web &>/dev/null && echo "  • OpenCode:      http://localhost:3003"
 [[ "$ENABLE_VOICE" == "true" ]] && echo "  • Whisper STT:   http://localhost:${SERVICE_PORTS[whisper]:-9000}"
@@ -181,26 +181,6 @@ DESKTOP_EOF
     fi
 
     ai_ok "Desktop shortcut created: Dream Server"
-fi
-
-#=============================================================================
-# Bash Completion Setup
-#=============================================================================
-if ! $DRY_RUN; then
-    COMPLETION_FILE="$INSTALL_DIR/completions/dream-cli.bash"
-    if [[ -f "$COMPLETION_FILE" ]]; then
-        # Add completion sourcing to .bashrc if not already present
-        if ! grep -q "dream-cli.bash" "$HOME/.bashrc" 2>/dev/null; then
-            cat >> "$HOME/.bashrc" << 'BASHRC_EOF'
-
-# Dream Server CLI bash completion
-if [[ -f "$HOME/dream-server/completions/dream-cli.bash" ]]; then
-    . "$HOME/dream-server/completions/dream-cli.bash"
-fi
-BASHRC_EOF
-            ai_ok "Bash completion enabled for dream-cli"
-        fi
-    fi
 fi
 
 echo ""

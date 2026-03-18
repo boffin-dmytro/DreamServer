@@ -13,7 +13,8 @@
 #   Add offline-specific configuration or bundled models here.
 # ============================================================================
 
-dream_progress 65 "offline" "Configuring offline mode"
+set -euo pipefail
+
 if [[ "$OFFLINE_MODE" == "true" ]] && $DRY_RUN; then
     log "[DRY RUN] Would configure offline/air-gapped mode (M1)"
     log "[DRY RUN] Would create offline mode marker, disable cloud features"

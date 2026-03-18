@@ -13,7 +13,8 @@
 #   Add new AMD-specific tuning parameters or kernel options here.
 # ============================================================================
 
-dream_progress 70 "amd-tuning" "Tuning AMD GPU settings"
+set -euo pipefail
+
 if [[ "$GPU_BACKEND" == "amd" ]] && $DRY_RUN; then
     log "[DRY RUN] Would apply AMD APU system tuning:"
     log "[DRY RUN]   - Install systemd user timers (session cleanup, memory shepherd)"

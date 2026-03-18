@@ -14,7 +14,8 @@
 #   Add new pre-flight checks (e.g., kernel version) here.
 # ============================================================================
 
-dream_progress 5 "preflight" "Running preflight checks"
+set -euo pipefail
+
 show_phase 1 6 "Pre-flight Checks" "~30 seconds"
 ai "I'm scanning your system for required components..."
 
