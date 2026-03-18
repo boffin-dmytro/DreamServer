@@ -1,0 +1,20 @@
+name: Validate Environment Schema
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  validate-env:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate .env.example against schema
+        run: |
+          cd dream-server
+          bash scripts/validate-env.sh .env.example .env.schema.json
