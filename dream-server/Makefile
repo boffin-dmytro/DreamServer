@@ -3,7 +3,7 @@
 
 SHELL_FILES := $(shell find . -name '*.sh' -not -path './node_modules/*' -not -path './.git/*' -not -path './data/*' -not -path './token-spy/*')
 
-.PHONY: help lint test bats smoke simulate gate doctor
+.PHONY: help lint test bats smoke simulate gate doctor integration
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
@@ -41,6 +41,11 @@ simulate: ## Run installer simulation harness
 
 doctor: ## Run diagnostic report
 	@bash scripts/dream-doctor.sh
+
+integration: ## Run integration tests
+	@echo "=== Integration tests ==="
+	@bash tests/integration/test-env-validation.sh
+	@echo "All integration tests passed."
 
 gate: lint test bats smoke simulate ## Full pre-release validation (lint + test + bats + smoke + simulate)
 	@echo ""
