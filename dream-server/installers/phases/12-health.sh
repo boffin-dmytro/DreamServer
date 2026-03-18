@@ -79,7 +79,7 @@ if docker inspect dream-perplexica &>/dev/null; then
         PYTHON_CMD="python"
     fi
 
-    PERPLEXICA_SETUP=$(curl -sf "${PERPLEXICA_URL}/api/config" 2>/dev/null | \
+    PERPLEXICA_SETUP=$(curl -sf --max-time 10 "${PERPLEXICA_URL}/api/config" 2>/dev/null | \
         "$PYTHON_CMD" -c "import sys,json;d=json.load(sys.stdin);print('done' if d['values']['setupComplete'] else 'needed')" 2>/dev/null || echo "skip")
 
     if [[ "$PERPLEXICA_SETUP" == "needed" ]]; then
