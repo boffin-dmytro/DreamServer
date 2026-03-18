@@ -11,4 +11,7 @@ RUN mkdir -p /app/data
 
 EXPOSE 8080
 
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+  CMD python -c "import httpx; httpx.get('http://localhost:8080/health', timeout=2).raise_for_status()" || exit 1
+
 CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${UVICORN_PORT:-8080} --log-level info"]
