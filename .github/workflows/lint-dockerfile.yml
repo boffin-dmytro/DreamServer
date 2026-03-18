@@ -1,0 +1,23 @@
+name: Lint Dockerfiles
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  hadolint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run hadolint on service Dockerfiles
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: "dream-server/extensions/services/*/Dockerfile"
+          recursive: true
+          ignore: DL3008,DL3009
+          failure-threshold: warning
