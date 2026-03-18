@@ -114,10 +114,10 @@ if command -v curl >/dev/null 2>&1; then
     fi
 fi
 
-# Collect extension diagnostics if service registry loaded
-if [[ "${#SERVICE_IDS[@]}" -gt 0 ]]; then
-    GPU_BACKEND="${GPU_BACKEND:-nvidia}"
-    EXT_DIAG_ITEMS=()
+# Collect extension diagnostics (wrapped in function to allow local variables)
+collect_extension_diagnostics() {
+    local GPU_BACKEND="${GPU_BACKEND:-nvidia}"
+    local EXT_DIAG_ITEMS=()
 
     for sid in "${SERVICE_IDS[@]}"; do
         # Skip core services
@@ -135,7 +135,13 @@ if [[ "${#SERVICE_IDS[@]}" -gt 0 ]]; then
 
         # Check container state
         if [[ "$DOCKER_DAEMON" == "true" && -n "$container" ]]; then
-            container_state=$(docker inspect --format '{{.State.Status}}' "$container" 2>/dev/null || echo "not_found")
+            local inspect_output
+            inspect_output=$(docker inspect --format '{{.State.Status}}' "$container" 2>&1)
+            if [[ $? -eq 0 ]]; then
+                container_state="$inspect_output"
+            else
+                container_state="not_found"
+            fi
 
             # Check health endpoint if container running
             if [[ "$container_state" == "running" ]]; then
@@ -163,6 +169,7 @@ if [[ "${#SERVICE_IDS[@]}" -gt 0 ]]; then
         # Check dependencies
         local deps="${SERVICE_DEPENDS[$sid]:-}"
         if [[ -n "$deps" ]]; then
+            local dep
             for dep in $deps; do
                 local dep_compose="${SERVICE_COMPOSE[$dep]:-}"
                 local dep_cat="${SERVICE_CATEGORIES[$dep]:-}"
@@ -175,15 +182,24 @@ if [[ "${#SERVICE_IDS[@]}" -gt 0 ]]; then
         # Build JSON object (escape quotes in values)
         local issues_json="[]"
         if [[ ${#issues[@]} -gt 0 ]]; then
-            issues_json="[\"$(printf '%s' "${issues[@]}" | sed 's/"/\\"/g' | tr '\n' ',' | sed 's/,$//' | sed 's/,/","/g')\"]"
+            # Use printf with newline separator, then convert to JSON array
+            issues_json="[\"$(printf '%s\n' "${issues[@]}" | sed 's/"/\\"/g' | tr '\n' ',' | sed 's/,$//' | sed 's/,/","/g')\"]"
         fi
 
         EXT_DIAG_ITEMS+=("{\"id\":\"$sid\",\"container_state\":\"$container_state\",\"health_status\":\"$health_status\",\"issues\":$issues_json}")
     done
 
     if [[ ${#EXT_DIAG_ITEMS[@]} -gt 0 ]]; then
-        EXT_DIAGNOSTICS="[$(IFS=,; echo "${EXT_DIAG_ITEMS[*]}")]"
+        echo "[$(IFS=,; echo "${EXT_DIAG_ITEMS[*]}")]"
+    else
+        echo "[]"
     fi
+}
+
+# Collect extension diagnostics if service registry loaded
+EXT_DIAGNOSTICS="[]"
+if [[ "${#SERVICE_IDS[@]}" -gt 0 ]]; then
+    EXT_DIAGNOSTICS=$(collect_extension_diagnostics)
 fi
 
 PYTHON_CMD="python3"
