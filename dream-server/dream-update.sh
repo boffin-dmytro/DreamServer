@@ -85,19 +85,45 @@ semver_compare() {
     return 0
 }
 
+# _prune_rollback_snapshots
+#   Removes oldest pre-update snapshots beyond MAX_BACKUPS.
+#   Guards against misconfigured ROLLBACK_DIR before any rm -rf.
+_prune_rollback_snapshots() {
+    if [[ -z "$ROLLBACK_DIR" || "$ROLLBACK_DIR" != */data/backups ]]; then
+        log_warn "ROLLBACK_DIR '${ROLLBACK_DIR}' does not end in /data/backups; skipping prune." >&2
+        return 0
+    fi
+    [[ -d "$ROLLBACK_DIR" ]] || return 0
+    local count=0
+    while IFS= read -r old_snap; do
+        count=$(( count + 1 ))
+        if (( count > MAX_BACKUPS )); then
+            log_info "Pruning old rollback snapshot: $(basename "$old_snap")" >&2
+            rm -rf "$old_snap"
+        fi
+    done < <(find "${ROLLBACK_DIR}" -maxdepth 1 -type d -name "pre-update-*" | sort -r)
+}
+
 # snapshot_pre_update <timestamp>
 #   Creates data/backups/pre-update-<timestamp>/ and copies:
 #     • .env and .env.* variants
 #     • docker-compose*.yml overlays (tracks active stack)
 #     • config/{litellm,n8n,openclaw,searxng}/ (per-extension config)
 #     • .version
-#   Prints the snapshot directory path on stdout.
+#   Validates timestamp format, writes snapshot.json, verifies integrity,
+#   then prints the snapshot directory path on stdout.
 snapshot_pre_update() {
     local timestamp="${1:-$(date +%Y%m%d-%H%M%S)}"
-    local snap_dir="${ROLLBACK_DIR}/pre-update-${timestamp}"
 
-    # All log calls redirect to stderr so that command-substitution callers
+    # All log calls redirect to stderr so command-substitution callers
     # (snap_dir=$(snapshot_pre_update ...)) only capture the path on stdout.
+
+    if [[ ! "$timestamp" =~ ^[0-9]{8}-[0-9]{6}$ ]]; then
+        log_error "Invalid timestamp format '${timestamp}'; expected YYYYMMDD-HHMMSS." >&2
+        return 1
+    fi
+
+    local snap_dir="${ROLLBACK_DIR}/pre-update-${timestamp}"
     log_info "Creating rollback snapshot: pre-update-${timestamp}" >&2
     mkdir -p "${snap_dir}"
 
@@ -108,7 +134,7 @@ snapshot_pre_update() {
         for f in ${INSTALL_DIR}/${pattern}; do
             [[ -f "$f" ]] || continue
             cp "$f" "${snap_dir}/"
-            (( files_saved++ )) || true
+            files_saved=$(( files_saved + 1 ))
         done
     done
 
@@ -116,7 +142,7 @@ snapshot_pre_update() {
     for f in "${INSTALL_DIR}"/docker-compose*.yml "${INSTALL_DIR}"/docker-compose*.yaml; do
         [[ -f "$f" ]] || continue
         cp "$f" "${snap_dir}/"
-        (( files_saved++ )) || true
+        files_saved=$(( files_saved + 1 ))
     done
 
     # Per-extension config directories
@@ -124,14 +150,14 @@ snapshot_pre_update() {
         local src="${INSTALL_DIR}/config/${ext_dir}"
         if [[ -d "$src" ]]; then
             cp -r "$src" "${snap_dir}/config-${ext_dir}"
-            (( files_saved++ )) || true
+            files_saved=$(( files_saved + 1 ))
         fi
     done
 
     # Version file
     if [[ -f "$VERSION_FILE" ]]; then
         cp "$VERSION_FILE" "${snap_dir}/.version"
-        (( files_saved++ )) || true
+        files_saved=$(( files_saved + 1 ))
     fi
 
     # Snapshot metadata
@@ -143,30 +169,46 @@ snapshot_pre_update() {
         '{type:"pre-update", timestamp:$ts, version:$ver, files_count:$fc, install_dir:$dir}' \
         > "${snap_dir}/snapshot.json"
 
+    # Integrity check: verify metadata is valid JSON before declaring success
+    if ! jq empty "${snap_dir}/snapshot.json"; then
+        log_error "Snapshot metadata is not valid JSON; aborting snapshot." >&2
+        rm -rf "${snap_dir}"
+        return 1
+    fi
+
     log_ok "Rollback snapshot ready (${files_saved} items): ${snap_dir}" >&2
 
-    # Prune oldest pre-update snapshots; keep at most MAX_BACKUPS
-    local count=0
-    while IFS= read -r old_snap; do
-        (( count++ )) || true
-        if (( count > MAX_BACKUPS )); then
-            log_info "Pruning old rollback snapshot: $(basename "$old_snap")" >&2
-            rm -rf "$old_snap"
-        fi
-    done < <(find "${ROLLBACK_DIR}" -maxdepth 1 -type d -name "pre-update-*" 2>/dev/null | sort -r)
+    _prune_rollback_snapshots
 
     echo "${snap_dir}"
 }
 
 # _restore_snapshot <snap_dir>
-#   Restores .env files, compose overlays, and per-extension config dirs
-#   from the given snapshot.  Does NOT restart services (caller's responsibility).
+#   Validates snapshot integrity, then restores .env files, compose overlays,
+#   and per-extension config dirs.  Does NOT restart services.
 _restore_snapshot() {
     local snap_dir="$1"
     if [[ ! -d "$snap_dir" ]]; then
         log_error "Rollback snapshot not found: ${snap_dir}"
         return 1
     fi
+
+    # Integrity: snapshot.json must exist and be valid JSON
+    if [[ ! -f "${snap_dir}/snapshot.json" ]]; then
+        log_error "Snapshot is missing snapshot.json; cannot verify integrity: ${snap_dir}"
+        return 1
+    fi
+    if ! jq empty "${snap_dir}/snapshot.json"; then
+        log_error "snapshot.json is not valid JSON; snapshot may be corrupt: ${snap_dir}"
+        return 1
+    fi
+
+    # Warn about absent critical files (non-fatal — install may not have had them)
+    for required in ".env" ".version"; do
+        if [[ ! -f "${snap_dir}/${required}" ]]; then
+            log_warn "Snapshot is missing ${required} — snapshot may be incomplete."
+        fi
+    done
 
     log_info "Restoring from rollback snapshot: $(basename "${snap_dir}")"
 
@@ -175,7 +217,6 @@ _restore_snapshot() {
     for f in "${snap_dir}"/*; do
         local base
         base="$(basename "$f")"
-        # Skip the metadata file and config- dirs
         [[ -f "$f" && "$base" != "snapshot.json" && "$base" != "metadata.json" ]] || continue
         cp "$f" "${INSTALL_DIR}/"
         log_info "  Restored: ${base}"
@@ -196,33 +237,81 @@ _restore_snapshot() {
 }
 
 # wait_for_healthy
-#   Polls cmd_health every few seconds until it passes or HEALTH_TIMEOUT expires.
+#   Polls cmd_health every 10 s until it passes or HEALTH_TIMEOUT expires.
+#   Health output is captured to a temp log; shown in full only on timeout.
 #   Returns 0 on success, 1 on timeout.
 wait_for_healthy() {
     local deadline=$(( SECONDS + HEALTH_TIMEOUT ))
     local attempt=0
     local delay=10
+    local health_log
+    health_log=$(mktemp /tmp/dream-health-XXXXXX.log)
 
     log_info "Waiting for services (timeout: ${HEALTH_TIMEOUT}s)..."
 
     while (( SECONDS < deadline )); do
-        (( attempt++ )) || true
-        if cmd_health &>/dev/null; then
+        attempt=$(( attempt + 1 ))
+        if cmd_health > "$health_log" 2>&1; then
             log_ok "Services healthy after ${attempt} attempt(s)."
+            rm -f "$health_log"
             return 0
         fi
         local remaining=$(( deadline - SECONDS ))
         if (( remaining > delay )); then
             log_info "  Not yet healthy — retrying in ${delay}s (${remaining}s remaining)..."
             sleep "$delay"
-        else
+        elif (( remaining > 0 )); then
             sleep "$remaining"
         fi
     done
 
     log_error "Health-check timeout after ${HEALTH_TIMEOUT}s. Final status:"
-    cmd_health || true
+    cat "$health_log"
+    rm -f "$health_log"
     return 1
+}
+
+# _update_rollback <reason> <snap_dir> [compose_flags]
+#   Restores the given snapshot and restarts services.
+#   Called when cmd_update encounters a non-zero exit at any step.
+_update_rollback() {
+    local reason="$1"
+    local snap_dir_arg="$2"
+    local compose_flags_arg="${3:-}"
+
+    log_error "${reason}"
+    log_warn "Auto-restoring rollback snapshot and restarting services..."
+
+    if ! _restore_snapshot "$snap_dir_arg"; then
+        log_error "CRITICAL: Snapshot restore failed. Manual recovery required."
+        log_error "  Snapshot : ${snap_dir_arg}"
+        log_error "  Steps    :"
+        log_error "    1. cp \"${snap_dir_arg}/.env\" \"${INSTALL_DIR}/.env\""
+        log_error "    2. cd \"${INSTALL_DIR}\" && docker compose up -d"
+        return 1
+    fi
+
+    cd "$INSTALL_DIR"
+    if [[ -n "${compose_flags_arg}" ]]; then
+        if ! docker compose ${compose_flags_arg} down --remove-orphans; then
+            log_warn "docker compose v2 down failed, trying v1..."
+            docker-compose ${compose_flags_arg} down --remove-orphans
+        fi
+        if ! docker compose ${compose_flags_arg} up -d; then
+            log_warn "docker compose v2 up failed, trying v1..."
+            docker-compose ${compose_flags_arg} up -d
+        fi
+    else
+        if ! docker compose down --remove-orphans; then
+            log_warn "docker compose v2 down failed, trying v1..."
+            docker-compose down --remove-orphans
+        fi
+        if ! docker compose up -d; then
+            log_warn "docker compose v2 up failed, trying v1..."
+            docker-compose up -d
+        fi
+    fi
+    log_warn "Rollback complete. Run 'dream-update.sh health' to verify."
 }
 
 #==============================================================================
@@ -418,41 +507,16 @@ cmd_update() {
     current_version=$(get_current_version)
 
     # ── Step 1: rollback snapshot ─────────────────────────────────────────────
-    # Snapshot is written to data/backups/pre-update-<timestamp>/ so it lives
-    # alongside the install and survives a HOME directory change.
     local timestamp
     timestamp=$(date +%Y%m%d-%H%M%S)
     local snap_dir
     snap_dir=$(snapshot_pre_update "$timestamp")
 
-    # Helper: restore snapshot + bring services back up with the old config.
-    # Defined inline so it captures $snap_dir and $compose_flags by reference.
-    _update_rollback() {
-        local reason="$1"
-        log_error "${reason}"
-        log_warn "Auto-restoring rollback snapshot and restarting services..."
-        _restore_snapshot "$snap_dir"
-        cd "$INSTALL_DIR"
-        if [[ -n "${compose_flags:-}" ]]; then
-            docker compose $compose_flags down --remove-orphans 2>/dev/null \
-                || docker-compose $compose_flags down --remove-orphans 2>/dev/null \
-                || true
-            docker compose $compose_flags up -d 2>/dev/null \
-                || docker-compose $compose_flags up -d 2>/dev/null \
-                || true
-        else
-            docker compose down --remove-orphans 2>/dev/null \
-                || docker-compose down --remove-orphans 2>/dev/null || true
-            docker compose up -d 2>/dev/null || docker-compose up -d 2>/dev/null || true
-        fi
-        log_warn "Rollback complete. Run 'dream-update.sh health' to verify."
-    }
-
     # Resolve compose flags once — used in restart and rollback paths.
     local compose_flags=""
     if [[ -x "${INSTALL_DIR}/scripts/resolve-compose-stack.sh" ]]; then
         compose_flags=$(bash "${INSTALL_DIR}/scripts/resolve-compose-stack.sh" \
-            --script-dir "$INSTALL_DIR" 2>/dev/null | tail -1)
+            --script-dir "$INSTALL_DIR" | tail -1)
     fi
     if [[ -n "${compose_flags}" ]]; then
         local all_exist=true
@@ -474,8 +538,8 @@ cmd_update() {
     fi
     cd "$INSTALL_DIR"
     git fetch origin
-    if ! git pull origin main 2>/dev/null && ! git pull origin master 2>/dev/null; then
-        _update_rollback "Git pull failed."
+    if ! git pull origin main && ! git pull origin master; then
+        _update_rollback "Git pull failed." "$snap_dir" "$compose_flags"
         return 1
     fi
 
@@ -487,7 +551,8 @@ cmd_update() {
             if [[ -f "$migration" && -x "$migration" ]]; then
                 log_info "Running: $(basename "$migration")"
                 if ! bash "$migration"; then
-                    _update_rollback "Migration failed: $(basename "$migration")."
+                    _update_rollback "Migration failed: $(basename "$migration")." \
+                        "$snap_dir" "$compose_flags"
                     return 1
                 fi
             fi
@@ -498,20 +563,32 @@ cmd_update() {
     log_info "Restarting services..."
     cd "$INSTALL_DIR"
     if [[ -n "${compose_flags}" ]]; then
-        docker compose $compose_flags down --remove-orphans 2>/dev/null \
-            || docker-compose $compose_flags down --remove-orphans
-        docker compose $compose_flags up -d 2>/dev/null \
-            || docker-compose $compose_flags up -d
+        if ! docker compose ${compose_flags} down --remove-orphans; then
+            log_warn "docker compose v2 down failed, trying v1..."
+            docker-compose ${compose_flags} down --remove-orphans
+        fi
+        if ! docker compose ${compose_flags} up -d; then
+            log_warn "docker compose v2 up failed, trying v1..."
+            docker-compose ${compose_flags} up -d
+        fi
     elif [[ -f "${INSTALL_DIR}/docker-compose.yml" ]]; then
-        docker compose down --remove-orphans 2>/dev/null || docker-compose down --remove-orphans
-        docker compose up -d 2>/dev/null || docker-compose up -d
+        if ! docker compose down --remove-orphans; then
+            log_warn "docker compose v2 down failed, trying v1..."
+            docker-compose down --remove-orphans
+        fi
+        if ! docker compose up -d; then
+            log_warn "docker compose v2 up failed, trying v1..."
+            docker-compose up -d
+        fi
     else
         log_warn "No compose files found. Skipping container restart."
     fi
 
     # ── Step 5: health-check with timeout ────────────────────────────────────
     if ! wait_for_healthy; then
-        _update_rollback "Services failed to become healthy after update (timeout: ${HEALTH_TIMEOUT}s)."
+        _update_rollback \
+            "Services failed to become healthy after update (timeout: ${HEALTH_TIMEOUT}s)." \
+            "$snap_dir" "$compose_flags"
         return 1
     fi
 
@@ -589,12 +666,19 @@ cmd_rollback() {
     # Stop services
     log_info "Stopping services..."
     cd "$INSTALL_DIR"
-    docker compose down 2>/dev/null || docker-compose down 2>/dev/null || true
+    if ! docker compose down; then
+        log_warn "docker compose v2 down failed, trying v1..."
+        docker-compose down
+    fi
 
     # Restore — use _restore_snapshot for pre-update snapshots (they include
     # config-* dirs); fall back to flat-file copy for legacy general backups.
     if [[ -f "${backup_path}/snapshot.json" ]]; then
-        _restore_snapshot "$backup_path"
+        if ! _restore_snapshot "$backup_path"; then
+            log_error "Restore failed. Manual recovery required."
+            log_error "  Source: ${backup_path}"
+            return 1
+        fi
     else
         log_info "Restoring configuration files (legacy backup)..."
         shopt -s dotglob
@@ -609,12 +693,13 @@ cmd_rollback() {
 
     # Restart services
     log_info "Restarting services..."
-    docker compose up -d 2>/dev/null || docker-compose up -d
+    if ! docker compose up -d; then
+        log_warn "docker compose v2 up failed, trying v1..."
+        docker-compose up -d
+    fi
 
-    # Verify health
-    log_info "Verifying health..."
-    sleep 10
-    if cmd_health; then
+    # Verify health using the same timeout-aware poller as cmd_update
+    if wait_for_healthy; then
         log_ok "Rollback complete!"
     else
         log_warn "Rollback complete but health checks failed. Manual intervention may be required."
