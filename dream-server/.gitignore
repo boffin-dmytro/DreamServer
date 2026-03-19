@@ -12,6 +12,7 @@
 *.key
 *.pem
 secrets.*
+!installers/lib/secrets.sh
 private.*
 credentials.*
 
