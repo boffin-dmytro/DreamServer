@@ -200,7 +200,73 @@ else
     fail "service-registry.sh or validate-dependencies.sh not found"
 fi
 
-# ── Test 5: Compose syntax validation ──
+# ── Test 5: GPU backend .env generation ──
+echo ""
+echo "── GPU backend .env generation ──"
+# Test .env generation for each GPU backend and tier combination
+for backend in nvidia amd apple cpu; do
+    for tier in T1 T2 T3 T4; do
+        TEST_DIR="$TMPDIR_SMOKE/test-${backend}-${tier}"
+        mkdir -p "$TEST_DIR"/{config,data,models}
+        mkdir -p "$TEST_DIR"/config/{n8n,litellm,openclaw,searxng}
+        cp -a "$ROOT_DIR"/* "$TEST_DIR/" 2>/dev/null || true
+
+        # Generate .env for this backend/tier combo
+        if bash -c "
+            export INSTALL_DIR='$TEST_DIR'
+            export SCRIPT_DIR='$ROOT_DIR'
+            export LOG_FILE='/dev/null'
+            export DRY_RUN=false
+            export INTERACTIVE=false
+            export DREAM_MODE=local
+            export GPU_BACKEND=$backend
+            export TIER=$tier
+            export LLM_MODEL=test-model
+            export GGUF_FILE=test.gguf
+            export MAX_CONTEXT=4096
+            export DREAM_VERSION=2.1.0
+            export ENABLE_VOICE=true
+            export ENABLE_WORKFLOWS=true
+            export ENABLE_RAG=true
+            export ENABLE_OPENCLAW=true
+
+            source installers/lib/constants.sh
+            source installers/lib/logging.sh
+            source installers/lib/ui.sh
+            source installers/lib/progress.sh
+
+            dream_progress() { :; }
+            ai() { :; }
+            ai_ok() { :; }
+            ai_warn() { :; }
+            ai_bad() { :; }
+            chapter() { :; }
+            signal() { :; }
+            show_phase() { :; }
+
+            source installers/phases/06-directories.sh
+        " 2>/dev/null; then
+            # Validate generated .env
+            if [[ -f "$TEST_DIR/.env" ]]; then
+                # Check GPU_BACKEND is set correctly
+                if grep -q "^GPU_BACKEND=$backend" "$TEST_DIR/.env"; then
+                    pass "$backend/$tier: .env generated with correct backend"
+                else
+                    fail "$backend/$tier: GPU_BACKEND not set correctly"
+                fi
+            else
+                fail "$backend/$tier: .env not generated"
+            fi
+        else
+            fail "$backend/$tier: .env generation failed"
+        fi
+
+        # Cleanup test directory
+        rm -rf "$TEST_DIR"
+    done
+done
+
+# ── Test 6: Compose syntax validation ──
 echo ""
 echo "── Compose syntax ──"
 if command -v docker &>/dev/null && docker compose version &>/dev/null 2>&1; then
@@ -277,7 +343,7 @@ else
     echo "  (skipped — docker compose not available)"
 fi
 
-# ── Test 6: All function calls resolve ──
+# ── Test 7: All function calls resolve ──
 echo ""
 echo "── Function resolution ──"
 # Check that ai_err is not called anywhere (it doesn't exist)
