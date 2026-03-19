@@ -247,10 +247,11 @@ MODELS_INI_EOF
     fi
 
     # Validate service dependencies before launching
-    if [[ -f "$INSTALL_DIR/lib/service-registry.sh" && -f "$INSTALL_DIR/lib/validate-dependencies.sh" ]]; then
-        . "$INSTALL_DIR/lib/service-registry.sh"
-        . "$INSTALL_DIR/lib/validate-dependencies.sh"
-        sr_load
+    if [[ -f "$SCRIPT_DIR/lib/service-registry.sh" && -f "$SCRIPT_DIR/lib/validate-dependencies.sh" ]]; then
+        # Service registry already loaded in install-core.sh, just load validator
+        if ! declare -F validate_service_dependencies >/dev/null 2>&1; then
+            . "$SCRIPT_DIR/lib/validate-dependencies.sh"
+        fi
 
         ai "Validating service dependencies..."
         if ! validate_service_dependencies; then
