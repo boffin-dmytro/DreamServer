@@ -53,6 +53,7 @@
       "canonical": [
         "docker-compose.base.yml",
         "docker-compose.amd.yml",
+        "docker-compose.cpu.yml",
         "docker-compose.nvidia.yml",
         "docker-compose.apple.yml",
         "docker-compose.arc.yml"

@@ -112,7 +112,7 @@ elif gpu_type == "apple":
     overlays = ["docker-compose.base.yml", "docker-compose.amd.yml"]
 else:
     llm_backend = "cpu"
-    overlays = ["docker-compose.base.yml", "docker-compose.nvidia.yml"]
+    overlays = ["docker-compose.base.yml", "docker-compose.cpu.yml"]
 
 tier = (hardware.get("tier") or "T1").upper()
 if tier in {"T1", "T2", "T3", "T4"}:

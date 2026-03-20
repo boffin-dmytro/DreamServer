@@ -24,6 +24,8 @@ PULL_LIST=()
 if [[ "$GPU_BACKEND" == "amd" ]]; then
     PULL_LIST+=("kyuz0/amd-strix-halo-toolboxes:rocm-7.2|LLAMA-SERVER — downloading the brain (AMD ROCm)")
     PULL_LIST+=("ignatberesnev/comfyui-gfx1151:v0.2|COMFYUI — image generation engine (gfx1151)")
+elif [[ "$GPU_BACKEND" == "cpu" ]]; then
+    PULL_LIST+=("ghcr.io/ggml-org/llama.cpp:server-b8248|LLAMA-SERVER — downloading the brain (CPU)")
 else
     PULL_LIST+=("ghcr.io/ggml-org/llama.cpp:server-cuda-b8248|LLAMA-SERVER — downloading the brain (NVIDIA CUDA)")
 fi
