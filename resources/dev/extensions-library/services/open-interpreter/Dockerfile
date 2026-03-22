@@ -1,7 +1,11 @@
 FROM python:3.12-slim@sha256:ccc7089399c8bb65dd1fb3ed6d55efa538a3f5e7fca3f5988ac3b5b87e593bf0
 
 # Install dependencies
-RUN pip install --no-cache-dir open-interpreter fastapi uvicorn pydantic
+RUN pip install --no-cache-dir \
+    open-interpreter==0.4.3 \
+    fastapi==0.135.1 \
+    uvicorn==0.42.0 \
+    pydantic==2.12.5
 
 # Create non-root user
 RUN useradd -m -s /bin/bash appuser
