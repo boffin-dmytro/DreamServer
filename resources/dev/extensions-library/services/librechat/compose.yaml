@@ -34,8 +34,8 @@ services:
       - BINGAI_TOKEN=${BINGAI_TOKEN:-}
       - DALLE3_API_KEY=${DALLE3_API_KEY:-}
       - DALLE3_BASEURL=${DALLE3_BASEURL:-}
-      - CREDS_KEY=${CREDS_KEY:-}
-      - CREDS_IV=${CREDS_IV:-}
+      - "CREDS_KEY=${CREDS_KEY:?CREDS_KEY must be set – generate with: openssl rand -hex 32}"
+      - "CREDS_IV=${CREDS_IV:?CREDS_IV must be set – generate with: openssl rand -hex 16}"
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set}
       - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET:?JWT_REFRESH_SECRET must be set}
       - APP_TITLE=${APP_TITLE:-LibreChat}
