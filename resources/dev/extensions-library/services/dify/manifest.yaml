@@ -38,6 +38,7 @@ service:
       required: false
       secret: false
       description: Initial admin password (optional, set in .env)
+  description: "LLMOps platform for building AI workflows, RAG pipelines, and autonomous agents."
 
 features:
   - id: agent-platform

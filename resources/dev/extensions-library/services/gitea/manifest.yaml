@@ -15,6 +15,7 @@ service:
   compose_file: compose.yaml
   category: optional
   depends_on: []
+  description: "Lightweight self-hosted Git service for managing repositories and CI/CD."
   env_vars:
     - key: GITEA_HOST
       description: "Hostname for Gitea server"
