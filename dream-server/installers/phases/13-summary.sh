@@ -58,8 +58,7 @@ if [[ -f "$SCRIPT_DIR/installers/lib/background-tasks.sh" ]]; then
         bg_task_summary >> "$LOG_FILE" 2>&1
 
         # Check SDXL Lightning download specifically
-        bg_task_status "sdxl-download" &>/dev/null
-        sdxl_status=$?
+        if bg_task_status "sdxl-download" &>/dev/null; then sdxl_status=0; else sdxl_status=$?; fi
         if [[ $sdxl_status -ne 3 ]]; then
             case $sdxl_status in
                 0)  # Still running
@@ -81,8 +80,7 @@ fi
 
 # Check bootstrap model upgrade status
 if [[ "${_BOOTSTRAP_ACTIVE:-false}" == "true" ]]; then
-    bg_task_status "full-model-download" &>/dev/null
-    _upgrade_status=$?
+    if bg_task_status "full-model-download" &>/dev/null; then _upgrade_status=0; else _upgrade_status=$?; fi
     case $_upgrade_status in
         0)  # Still running
             echo ""
