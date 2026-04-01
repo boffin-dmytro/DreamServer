@@ -234,7 +234,7 @@ SEARXNG_PORT=8888
 #=== Security (auto-generated, keep secret!) ===
 WEBUI_SECRET=$webuiSecret
 DASHBOARD_API_KEY=$dashboardApiKey
-N8N_USER=admin
+N8N_USER=admin@dreamserver.local
 N8N_PASS=$n8nPass
 LITELLM_KEY=$litellmKey
 LIVEKIT_API_KEY=$livekitApiKey
@@ -254,7 +254,6 @@ ENABLE_WEB_SEARCH=true
 WEB_SEARCH_ENGINE=searxng
 
 #=== n8n Settings ===
-N8N_AUTH=true
 N8N_HOST=localhost
 N8N_WEBHOOK_URL=http://localhost:5678
 TIMEZONE=$tz

@@ -381,7 +381,7 @@ LANGFUSE_PORT=${LANGFUSE_PORT}
 #=== Security (auto-generated, keep secret!) ===
 WEBUI_SECRET=${WEBUI_SECRET}
 DASHBOARD_API_KEY=${DASHBOARD_API_KEY}
-N8N_USER=admin
+N8N_USER=admin@dreamserver.local
 N8N_PASS=${N8N_PASS}
 LITELLM_KEY=${LITELLM_KEY}
 LIVEKIT_API_KEY=$(_env_get LIVEKIT_API_KEY "$(openssl rand -hex 16 2>/dev/null || head -c 16 /dev/urandom | xxd -p)")
@@ -401,7 +401,6 @@ ENABLE_WEB_SEARCH=true
 WEB_SEARCH_ENGINE=searxng
 
 #=== n8n Settings ===
-N8N_AUTH=true
 N8N_HOST=localhost
 N8N_WEBHOOK_URL=http://localhost:5678
 TIMEZONE=${SYSTEM_TZ:-UTC}
