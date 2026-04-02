@@ -7,6 +7,7 @@ services:
       - no-new-privileges:true
     environment:
       - SEARXNG_BASE_URL=http://localhost:${SEARXNG_PORT:-8888}/
+      - SEARXNG_SECRET=${SEARXNG_SECRET:?SEARXNG_SECRET must be set – run the installer or add to .env}
     volumes:
       - ./config/searxng:/etc/searxng:rw
     ports:

@@ -242,6 +242,7 @@ LIVEKIT_API_SECRET=$livekitSecret
 OPENCLAW_TOKEN=$openclawToken
 OPENCODE_SERVER_PASSWORD=$opencodePassword
 OPENCODE_PORT=3003
+SEARXNG_SECRET=$searxngSecret
 DIFY_SECRET_KEY=$difySecretKey
 
 #=== Voice Settings ===

@@ -77,8 +77,11 @@ generate_dream_env() {
         ENV_DASHBOARD_KEY="$(read_env_value "$env_path" "DASHBOARD_API_KEY")"
         ENV_OPENCLAW_TOKEN="$(read_env_value "$env_path" "OPENCLAW_TOKEN")"
 
-        # SearXNG secret is stored in settings.yml, not .env.
-        ENV_SEARXNG_SECRET="$(read_searxng_secret "$searx_settings_path")"
+        # SearXNG secret: prefer .env, fall back to settings.yml, then generate.
+        ENV_SEARXNG_SECRET="$(read_env_value "$env_path" "SEARXNG_SECRET")"
+        if [[ -z "$ENV_SEARXNG_SECRET" ]]; then
+            ENV_SEARXNG_SECRET="$(read_searxng_secret "$searx_settings_path")"
+        fi
         if [[ -z "$ENV_SEARXNG_SECRET" ]]; then
             ENV_SEARXNG_SECRET="$(new_secure_hex 32)"
         fi
@@ -189,6 +192,7 @@ LIVEKIT_API_KEY=${livekit_api_key}
 LIVEKIT_API_SECRET=${livekit_secret}
 OPENCLAW_TOKEN=${openclaw_token}
 QDRANT_API_KEY=${qdrant_api_key}
+SEARXNG_SECRET=${searxng_secret}
 
 #=== OpenCode Settings ===
 OPENCODE_PORT=3003
