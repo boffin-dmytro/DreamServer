@@ -124,13 +124,17 @@ jobs:
 
       - name: Review metrics
         if: always()
+        env:
+          IS_FORK: ${{ steps.fork_check.outputs.is_fork }}
+          FILES_CHANGED: ${{ steps.pr_size.outputs.files_changed }}
+          LINES_CHANGED: ${{ steps.pr_size.outputs.lines_changed }}
         run: |
           echo "### Review Metrics" >> $GITHUB_STEP_SUMMARY
-          if [ "${{ steps.fork_check.outputs.is_fork }}" == "true" ]; then
+          if [ "$IS_FORK" == "true" ]; then
             echo "- Skipped: fork PR (no API key)" >> $GITHUB_STEP_SUMMARY
           else
-            echo "- Files changed: ${{ steps.pr_size.outputs.files_changed }}" >> $GITHUB_STEP_SUMMARY
-            echo "- Lines changed: ${{ steps.pr_size.outputs.lines_changed }}" >> $GITHUB_STEP_SUMMARY
+            echo "- Files changed: ${FILES_CHANGED:-0}" >> $GITHUB_STEP_SUMMARY
+            echo "- Lines changed: ${LINES_CHANGED:-0}" >> $GITHUB_STEP_SUMMARY
             echo "- Estimated cost: ~\$1.50" >> $GITHUB_STEP_SUMMARY
           fi
 

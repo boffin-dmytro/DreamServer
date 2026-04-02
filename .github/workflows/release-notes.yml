@@ -42,10 +42,17 @@ jobs:
           fi
           echo "Required secrets present"
 
+      - name: Validate release tag format
+        run: |
+          if ! echo "$RELEASE_TAG" | grep -qE '^v?[0-9]+\.[0-9]+'; then
+            echo "::error::Invalid release tag format: $RELEASE_TAG (expected vX.Y.Z or X.Y.Z)"
+            exit 1
+          fi
+
       - name: Get previous release tag
         id: prev_tag
         run: |
-          PREV_TAG=$(git tag --sort=-v:refname | grep -v "^${RELEASE_TAG}$" | head -1)
+          PREV_TAG=$(git tag --sort=-v:refname | grep -Fxv "$RELEASE_TAG" | head -1)
           if [ -z "$PREV_TAG" ]; then
             PREV_TAG=$(git rev-list --max-parents=0 HEAD | head -1)
             echo "No previous tag found, using initial commit: $PREV_TAG"
