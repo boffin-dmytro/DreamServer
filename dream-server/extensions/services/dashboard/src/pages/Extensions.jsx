@@ -250,6 +250,14 @@ export default function Extensions() {
         />
       </div>
 
+      {/* Agent offline banner */}
+      {catalog?.agent_available === false && (
+        <div className="mb-4 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200 flex items-center gap-2">
+          <span className="shrink-0">⚠</span>
+          <span>Host agent is offline — install, enable, and disable operations are unavailable. Container logs cannot be fetched.</span>
+        </div>
+      )}
+
       {/* Card grid */}
       {filtered.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 text-zinc-500">
@@ -264,6 +272,7 @@ export default function Extensions() {
               key={ext.id}
               ext={ext}
               gpuBackend={catalog?.gpu_backend}
+              agentAvailable={catalog?.agent_available}
               onDetails={() => setExpanded(ext.id)}
               onConsole={() => setConsoleExt(ext)}
               onAction={requestAction}
@@ -334,13 +343,14 @@ function SummaryItem({ label, value, color }) {
   )
 }
 
-function ExtensionCard({ ext, gpuBackend, onDetails, onConsole, onAction, mutating }) {
+function ExtensionCard({ ext, gpuBackend, agentAvailable, onDetails, onConsole, onAction, mutating }) {
   const iconName = ext.features?.[0]?.icon
   const Icon = (iconName && ICON_MAP[iconName]) || Package
   const status = ext.status || 'not_installed'
   const statusStyle = STATUS_STYLES[status] || STATUS_STYLES.not_installed
   const isMutating = mutating === ext.id
   const anyMutating = !!mutating
+  const agentOffline = agentAvailable === false
 
   const isCore = ext.source === 'core'
   const isUserExt = ext.source === 'user'
@@ -392,7 +402,7 @@ function ExtensionCard({ ext, gpuBackend, onDetails, onConsole, onAction, mutati
             )}
             {isToggleable && (
               <button
-                disabled={anyMutating}
+                disabled={anyMutating || agentOffline}
                 onClick={() => onAction(ext, status === 'enabled' ? 'disable' : 'enable')}
                 className={`relative inline-flex h-[18px] w-[32px] shrink-0 rounded-full transition-colors disabled:opacity-50 ${
                   status === 'enabled' ? 'bg-green-500' : 'bg-zinc-600'
@@ -417,7 +427,7 @@ function ExtensionCard({ ext, gpuBackend, onDetails, onConsole, onAction, mutati
         <div className="flex gap-1.5">
           {showInstall && (
             <button
-              disabled={anyMutating}
+              disabled={anyMutating || agentOffline}
               onClick={() => onAction(ext, 'install')}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-indigo-500 text-white hover:bg-indigo-400 transition-colors disabled:opacity-50 shadow-sm shadow-indigo-500/20"
             >
@@ -426,7 +436,7 @@ function ExtensionCard({ ext, gpuBackend, onDetails, onConsole, onAction, mutati
           )}
           {showRemove && (
             <button
-              disabled={anyMutating}
+              disabled={anyMutating || agentOffline}
               onClick={() => onAction(ext, 'uninstall')}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-zinc-800 text-red-400 hover:bg-red-500/20 hover:text-red-300 transition-colors disabled:opacity-50"
             >
@@ -459,8 +469,11 @@ function ExtensionCard({ ext, gpuBackend, onDetails, onConsole, onAction, mutati
           {(isUserExt || isCore) && status !== 'not_installed' && (
             <button
               onClick={onConsole}
-              className="flex items-center gap-1 px-2 py-1.5 text-xs text-zinc-500 hover:text-green-400 hover:bg-green-500/10 rounded-lg transition-colors"
-              title="View logs"
+              disabled={agentOffline}
+              className={`flex items-center gap-1 px-2 py-1.5 text-xs rounded-lg transition-colors ${
+                agentOffline ? 'text-zinc-600 cursor-not-allowed' : 'text-zinc-500 hover:text-green-400 hover:bg-green-500/10'
+              }`}
+              title={agentOffline ? 'Agent offline' : 'View logs'}
             >
               <Terminal size={11} />
             </button>
