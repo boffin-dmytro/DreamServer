@@ -1,9 +1,6 @@
 # SillyTavern whitelist configuration for Docker environments.
-# Docker NATs host connections through the bridge gateway (172.16.0.0/12).
-# Without this entry, all host access returns 403 Forbidden.
-whitelistMode: true
-whitelist:
-  - "::1"
-  - 127.0.0.1
-  - 172.16.0.0/12
-whitelistDockerHosts: true
+# Host-side security is handled by compose port binding (127.0.0.1 only).
+# Application-level whitelist is disabled to avoid blocking Docker bridge
+# traffic — SillyTavern doesn't support CIDR notation, so individual
+# gateway IPs would need to be enumerated for each Docker network.
+whitelistMode: false
