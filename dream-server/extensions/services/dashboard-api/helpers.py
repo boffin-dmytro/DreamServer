@@ -6,6 +6,7 @@ import logging
 import os
 import platform
 import shutil
+import socket
 import time
 from pathlib import Path
 from typing import Optional
@@ -33,7 +34,10 @@ async def _get_aio_session() -> aiohttp.ClientSession:
     """Return (and lazily create) a module-level aiohttp session."""
     global _aio_session
     if _aio_session is None or _aio_session.closed:
-        _aio_session = aiohttp.ClientSession(timeout=_HEALTH_TIMEOUT)
+        _aio_session = aiohttp.ClientSession(
+            timeout=_HEALTH_TIMEOUT,
+            connector=aiohttp.TCPConnector(family=socket.AF_INET),
+        )
     return _aio_session
 
 
