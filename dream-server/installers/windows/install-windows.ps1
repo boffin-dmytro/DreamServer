@@ -258,7 +258,7 @@ if ($dryRun) {
                 # --extra-models-dir: Lemonade auto-discovers GGUF files in this directory
                 # --no-tray: headless mode (no GUI system tray icon)
                 # --llamacpp vulkan: AMD Vulkan GPU acceleration
-                # Model loads automatically on first chat request — no /api/v1/load needed
+                # Model loads automatically on first chat request -- no /api/v1/load needed
                 Write-AI "Starting Lemonade server..."
                 $modelsDir = Join-Path (Join-Path $installDir "data") "models"
                 $lemonadeArgs = @(
@@ -413,7 +413,7 @@ if ($dryRun) {
         } elseif ($gpuInfo.Backend -eq "amd") {
             $composeFlags += @("-f", "installers/windows/docker-compose.windows-amd.yml")
         } else {
-            # No supported GPU detected (Intel integrated, etc.) — use CPU-only overlay
+            # No supported GPU detected (Intel integrated, etc.) -- use CPU-only overlay
             Write-AIWarn "No supported GPU detected. Using CPU-only inference (slower)."
             $composeFlags += @("-f", "docker-compose.cpu.yml")
         }
@@ -560,7 +560,7 @@ if ($dryRun) {
 
                 # Write a temp wrapper script to avoid Windows/PowerShell quoting
                 # issues. Empty arguments (e.g., SHA256 for some tiers) get lost
-                # during command-line parsing — embedding them in a script file
+                # during command-line parsing -- embedding them in a script file
                 # with bash double-quotes preserves them correctly.
                 $wrapperScript = Join-Path $logDir "bootstrap-run.sh"
                 $wrapperContent = @"
