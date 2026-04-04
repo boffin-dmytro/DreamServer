@@ -111,6 +111,20 @@ def _scan_compose_content(compose_path: Path, *, trusted: bool = False) -> None:
                 status_code=400,
                 detail=f"Service '{svc_name}' uses privileged mode",
             )
+        # Block Docker Compose internal label spoofing
+        labels = svc_def.get("labels", [])
+        if isinstance(labels, dict):
+            label_keys = labels.keys()
+        elif isinstance(labels, list):
+            label_keys = [lbl.split("=", 1)[0] for lbl in labels if isinstance(lbl, str)]
+        else:
+            label_keys = []
+        for lk in label_keys:
+            if lk.startswith("com.docker.compose."):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Extension rejected: reserved Docker Compose label '{lk}' in service '{svc_name}'",
+                )
         volumes = svc_def.get("volumes", [])
         if isinstance(volumes, list):
             for vol in volumes:
@@ -456,11 +470,11 @@ async def extension_logs(
     service_id: str,
     api_key: str = Depends(verify_api_key),
 ):
-    """Get container logs for an extension via the host agent."""
+    """Get container logs for any service via the host agent."""
     if not _SERVICE_ID_RE.match(service_id):
         raise HTTPException(status_code=404, detail=f"Invalid service_id: {service_id}")
 
-    url = f"{AGENT_URL}/v1/extension/logs"
+    url = f"{AGENT_URL}/v1/service/logs"
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {DREAM_AGENT_KEY}",
@@ -470,8 +484,18 @@ async def extension_logs(
     try:
         with urllib.request.urlopen(req, timeout=_AGENT_LOG_TIMEOUT) as resp:
             return json.loads(resp.read().decode())
-    except Exception:
-        raise HTTPException(status_code=503, detail="Host agent unavailable — cannot fetch logs")
+    except urllib.error.HTTPError as exc:
+        try:
+            err_body = json.loads(exc.read().decode())
+            detail = err_body.get("error", f"Host agent error: HTTP {exc.code}")
+        except (json.JSONDecodeError, OSError):
+            detail = f"Host agent returned HTTP {exc.code}"
+        raise HTTPException(status_code=exc.code, detail=detail)
+    except (urllib.error.URLError, OSError):
+        raise HTTPException(
+            status_code=503,
+            detail=f"Host agent unavailable. Use 'docker logs dream-{service_id}' in terminal.",
+        )
 
 
 @router.post("/api/extensions/{service_id}/install")
