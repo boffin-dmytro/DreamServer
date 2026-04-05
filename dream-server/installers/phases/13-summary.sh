@@ -323,7 +323,7 @@ echo ""
 DASHBOARD_PORT="${SERVICE_PORTS[dashboard]:-3001}"
 WEBUI_PORT="${SERVICE_PORTS[open-webui]:-3000}"
 OPENCLAW_PORT="${SERVICE_PORTS[openclaw]:-7860}"
-LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "")
 echo -e "${GRN}──────────────────────────────────────────────────────────────────────────────${NC}"
 echo -e "${BGRN}  YOUR DREAM SERVER IS LIVE${NC}"
 echo -e "${GRN}──────────────────────────────────────────────────────────────────────────────${NC}"
