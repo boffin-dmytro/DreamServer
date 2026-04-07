@@ -118,12 +118,14 @@ def _compute_extension_status(ext: dict, services_by_id: dict) -> str:
         if ps == "error":
             return "error"
         if ps == "started":
-            # Container is up but healthcheck may not have passed yet.
-            # Check actual health — if healthy, let it fall through to
-            # return "enabled"; otherwise keep showing "installing".
-            svc = services_by_id.get(ext_id)
-            if not (svc and svc.status == "healthy"):
-                return "installing"
+            # Container was started by the installer. If the progress is
+            # recent (<5 min), the healthcheck may still be running —
+            # show "installing". If older, the user likely stopped the
+            # container afterwards — fall through to normal status logic.
+            if not _is_stale(progress.get("updated_at", ""), max_age_seconds=300):
+                svc = services_by_id.get(ext_id)
+                if not (svc and svc.status == "healthy"):
+                    return "installing"
 
     # Core service loaded from manifests
     if ext_id in SERVICES:
