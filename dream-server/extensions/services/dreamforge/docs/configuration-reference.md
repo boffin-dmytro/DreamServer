@@ -16,7 +16,7 @@ Dream-Forge resolves configuration values in the following order (highest priori
 
 1. **Environment variables** -- always take precedence when set.
 2. **Configuration files** -- `mcp-servers.json`, permission YAML files, `org-policy.yaml`.
-3. **Built-in defaults** -- hardcoded fallback values defined in `config.py`.
+3. **Built-in defaults** -- hardcoded fallback values defined in the Rust configuration module.
 
 Setting an environment variable will override any value found in a config file or default.
 
@@ -24,7 +24,7 @@ Setting an environment variable will override any value found in a config file o
 
 ## Environment Variables
 
-All environment variables below are read at startup from `config.py`. Restart the server after changing any value.
+All environment variables below are read at startup from the configuration module. Restart the server after changing any value.
 
 ### Paths
 
@@ -109,7 +109,7 @@ These variables point to companion containers or external services. Features tha
 
 ## Internal Constants
 
-The following values are defined in `config.py` and cannot be changed via environment variables. They are documented here for reference and troubleshooting.
+The following values are defined in the configuration module and cannot be changed via environment variables. They are documented here for reference and troubleshooting.
 
 | Constant | Value | Description |
 |---|---|---|
@@ -134,7 +134,7 @@ In addition to environment variables, Dream-Forge reads the following files at s
 
 | File | Purpose |
 |---|---|
-| `config/dreamforge/mcp-servers.json` | Defines available MCP servers, their transport, and tool routing. See [MCP Configuration](mcp-configuration.md). |
+| `.forge/settings.json` | Defines available MCP servers, their transport, and tool routing. See [MCP Configuration](mcp-configuration.md). |
 | Permission rule YAML files | Customize which tool calls require approval and under what conditions. See [Permissions Guide](permissions-guide.md). |
 | `org-policy.yaml` | Organization-wide policy overrides applied before user-level permissions. See [Permissions Guide](permissions-guide.md). |
 

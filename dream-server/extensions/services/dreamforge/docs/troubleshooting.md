@@ -6,19 +6,6 @@ Common issues and how to fix them.
 
 ## Installation
 
-### Python version error
-
-```
-ERROR: Requires Python >=3.12
-```
-
-Check your version: `python3 --version`. DreamForge requires Python 3.12+. Install from [python.org](https://www.python.org/downloads/) or use pyenv:
-
-```bash
-pyenv install 3.12
-pyenv local 3.12
-```
-
 ### Node.js version error
 
 ```
@@ -30,15 +17,6 @@ DreamForge requires Node.js 18+. Check with `node --version`. Install from [node
 ```bash
 nvm install 18
 nvm use 18
-```
-
-### pip install fails with "No matching distribution"
-
-Make sure you're using the correct Python version and pip is up to date:
-
-```bash
-python3.12 -m pip install --upgrade pip
-python3.12 -m pip install -r extensions/services/dreamforge/requirements.txt
 ```
 
 ---
@@ -200,7 +178,7 @@ Note: The backend runs on `DREAMFORGE_PORT` (default 3011 in dev mode). The fron
 ### "Module not found" errors during `npm install`
 
 ```bash
-cd extensions/services/dreamforge/frontend
+cd rust/frontend
 rm -rf node_modules package-lock.json
 npm install
 ```
@@ -254,7 +232,7 @@ See [Docker Guide](docker-guide.md) for full Docker setup instructions.
 - Verify the command exists: `which npx` (or the server command)
 - Check that the server supports MCP protocol version 2024-11-05
 - Look for errors in DreamForge logs (the server's stderr is captured)
-- Make sure `config/dreamforge/mcp-servers.json` is valid JSON
+- Make sure `.forge/settings.json` is valid JSON
 
 ### MCP tool calls timing out
 

@@ -6,7 +6,6 @@ This guide walks you through setting up DreamForge from scratch and sending your
 
 ## Prerequisites
 
-- **Python 3.12+** — [python.org/downloads](https://www.python.org/downloads/)
 - **Node.js 18+** — [nodejs.org](https://nodejs.org/)
 - **A running LLM server** with an OpenAI-compatible API (see below)
 
@@ -74,13 +73,10 @@ DreamForge auto-detects the tier from the model name and adapts. For the best ex
 git clone https://github.com/Light-Heart-Labs/Dream-Forge.git
 cd Dream-Forge
 
-# Install Python dependencies
-pip install -r extensions/services/dreamforge/requirements.txt
-
 # Install frontend dependencies
-cd extensions/services/dreamforge/frontend
+cd rust/frontend
 npm install
-cd ../../../..
+cd ../..
 ```
 
 ## Step 3: Configure (Optional)
@@ -132,7 +128,7 @@ Type a message in the input bar at the bottom and press Enter. Try something lik
 
 ### What Happens When You Send a Message
 
-1. Your message goes over WebSocket to the FastAPI backend
+1. Your message goes over WebSocket to the Rust backend
 2. The **query loop** builds a system prompt (with memory, file tree, git branch), calls your local LLM, and streams tokens back to your browser
 3. When the LLM calls a tool (e.g., "read this file"), the call passes through the **7-step security pipeline**: schema validation, shell security parsing, permission check, APE policy check, execution, output truncation, and audit logging
 4. If a tool needs permission (e.g., bash commands, file writes), you'll see a **permission dialog** — approve or deny

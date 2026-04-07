@@ -12,18 +12,18 @@ How to run DreamForge with Docker, either standalone or as a DreamServer extensi
 cd Dream-Forge
 
 # Build the frontend first
-cd extensions/services/dreamforge/frontend
+cd rust/frontend
 npm install && npm run build
 cd ../../../..
 
 # Build the Docker image
-docker build -t dreamforge extensions/services/dreamforge/
+docker build -t dreamforge rust/
 ```
 
 ### 2. Run with Docker Compose
 
 ```bash
-docker compose -f extensions/services/dreamforge/compose.yaml up -d
+docker compose -f compose.yaml up -d
 ```
 
 Open **http://localhost:3010** in your browser.
@@ -31,7 +31,7 @@ Open **http://localhost:3010** in your browser.
 ### 3. Stop
 
 ```bash
-docker compose -f extensions/services/dreamforge/compose.yaml down
+docker compose -f compose.yaml down
 ```
 
 ---
@@ -41,7 +41,7 @@ docker compose -f extensions/services/dreamforge/compose.yaml down
 Copy the DreamForge extension into your DreamServer install:
 
 ```bash
-cp -r extensions/services/dreamforge/ /path/to/dreamserver/extensions/services/
+cp -r rust/ /path/to/dreamserver/extensions/services/dreamforge/
 ```
 
 It registers automatically via the manifest system. Start it with:
@@ -58,7 +58,7 @@ DreamForge connects to DreamServer's service mesh and auto-discovers llama-serve
 
 ```yaml
 dreamforge:
-  build: ./extensions/services/dreamforge
+  build: ./rust
   container_name: dream-dreamforge
   restart: unless-stopped
   security_opt:
@@ -122,7 +122,7 @@ docker network create dream-network
 
 ```yaml
 healthcheck:
-  test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3010/health')"]
+  test: ["CMD", "curl", "-f", "http://localhost:3010/health"]
   interval: 30s
   timeout: 10s
   retries: 3
@@ -149,7 +149,7 @@ Or mount the `.env.example` file:
 ```bash
 cp .env.example .env
 # Edit .env with your values
-docker compose --env-file .env -f extensions/services/dreamforge/compose.yaml up -d
+docker compose --env-file .env -f compose.yaml up -d
 ```
 
 See [Configuration Reference](configuration-reference.md) for all available variables.
@@ -203,14 +203,13 @@ To enable an optional service, make sure it's running on the same Docker network
 
 ## Building the Image Locally
 
-The Dockerfile is a single-stage build based on `python:3.12-slim`:
+The Dockerfile is a multi-stage build based on Rust and Node:
 
 ```bash
-docker build -t dreamforge extensions/services/dreamforge/
+docker build -t dreamforge rust/
 ```
 
 What's installed:
-- Python 3.12 with FastAPI, uvicorn, and dependencies
 - System packages: `curl`, `git`, `ripgrep` (used by tools)
 - A non-root user `forger` (UID 1000) runs the application
 - Pre-built frontend served as static files from `/app/static/`

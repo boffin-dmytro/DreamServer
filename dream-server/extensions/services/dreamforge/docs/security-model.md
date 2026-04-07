@@ -101,7 +101,7 @@ These require explicit user approval each time:
 - **Network:** `curl`, `wget`, `ssh`, `scp`, `rsync`
 - **Destructive git:** `push`, `reset --hard`, `clean -f`
 - **Containers:** `docker run`, `docker exec`
-- **Package management:** `pip install`, `npm publish`
+- **Package management:** `cargo install`, `npm publish`
 - **File deletion:** `rm` (without the always-blocked `rm -rf /` pattern)
 
 ---

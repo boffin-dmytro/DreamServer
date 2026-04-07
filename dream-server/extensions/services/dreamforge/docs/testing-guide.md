@@ -5,35 +5,29 @@ How to run existing tests and write new ones for DreamForge.
 ---
 
 ## Running Tests
-
-### Backend (Python)
+### Backend (Rust)
 
 ```bash
-cd extensions/services/dreamforge
-
 # Run all tests
-python -m pytest tests/ -v --tb=short
+cargo test --workspace
 
-# Run a specific test file
-python -m pytest tests/test_deep_security.py -v
+# Run tests for a specific crate
+cargo test -p dreamforge-security
 
-# Run a specific test class
-python -m pytest tests/test_deep_security.py::TestReadOnlyRules -v
+# Run a specific test
+cargo test -p dreamforge-security test_shell_parser
 
-# Run a specific test method
-python -m pytest tests/test_deep_security.py::TestReadOnlyRules::test_echo -v
-
-# Run with more verbose output
-python -m pytest tests/ -v --tb=long
+# Run with verbose output
+cargo test --workspace -- --nocapture
 
 # Run only tests matching a keyword
-python -m pytest tests/ -v -k "security"
+cargo test --workspace -- security
 ```
 
 ### Frontend (JavaScript)
 
 ```bash
-cd extensions/services/dreamforge/frontend
+cd rust/frontend
 
 # Run all tests (single run)
 npm test
@@ -50,22 +44,22 @@ Frontend tests use [Vitest](https://vitest.dev/) with jsdom environment and [@te
 
 ### Backend Tests
 
-All backend tests are in `extensions/services/dreamforge/tests/`. There are 40+ test files organized by area:
+All backend tests are in `rust/crates/*/tests/`. There are 40+ test files organized by area:
 
 | Category | Key Files | What They Test |
 |----------|-----------|----------------|
-| Security | `test_deep_security.py`, `test_adversarial_security.py`, `test_shell_security.py`, `test_shell_parser.py` | Shell injection defense, command classification, read-only rules |
-| Permissions | `test_permission_engine.py`, `test_permission_sanitizer.py`, `test_deep_permissions.py` | Mode behavior, session grants, rule evaluation, dangerous rule sanitization |
-| Tools | `test_tool_pipeline.py`, `test_phase1_tools.py`, `test_final_tools.py`, `test_tool_depth.py` | Tool execution, pipeline steps, individual tool behavior |
-| Agent | `test_deep_agent.py`, `test_e2e.py` | Query loop, WebSocket message flow, rate limiting |
-| MCP | `test_deep_mcp.py` | Transport config, resource loading, sampling |
-| Models | `test_models_router.py` | Pydantic model validation |
-| Paths | `test_path_validator.py` | Workspace containment, sensitive files, symlinks |
-| Features | `test_new_features.py`, `test_bug_fixes.py` | Specific features and regression tests |
+| Security | `deep_security.rs`, `adversarial_security.rs`, `shell_security.rs`, `shell_parser.rs` | Shell injection defense, command classification, read-only rules |
+| Permissions | `permission_engine.rs`, `permission_sanitizer.rs`, `deep_permissions.rs` | Mode behavior, session grants, rule evaluation, dangerous rule sanitization |
+| Tools | `tool_pipeline.rs`, `phase1_tools.rs`, `final_tools.rs`, `tool_depth.rs` | Tool execution, pipeline steps, individual tool behavior |
+| Agent | `deep_agent.rs`, `e2e.rs` | Query loop, WebSocket message flow, rate limiting |
+| MCP | `deep_mcp.rs` | Transport config, resource loading, sampling |
+| Models | `models_router.rs` | Model validation |
+| Paths | `path_validator.rs` | Workspace containment, sensitive files, symlinks |
+| Features | `new_features.rs`, `bug_fixes.rs` | Specific features and regression tests |
 
 ### Frontend Tests
 
-Frontend tests are in `extensions/services/dreamforge/frontend/src/components/__tests__/`:
+Frontend tests are in `rust/frontend/src/components/__tests__/`:
 
 | File | What It Tests |
 |------|---------------|
@@ -79,107 +73,88 @@ Frontend tests are in `extensions/services/dreamforge/frontend/src/components/__
 
 ### Basic Pattern
 
-Tests are self-contained — they add the project root to `sys.path` and import directly:
+Tests live alongside the code in each crate under `rust/crates/*/tests/` or as inline `#[cfg(test)]` modules:
 
-```python
-"""Tests for my_module."""
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-import sys
-from pathlib import Path
+    #[test]
+    fn test_basic_functionality() {
+        let tool = MyTool::new();
+        assert_eq!(tool.name(), "my_tool");
+        assert_eq!(tool.access_level(), AccessLevel::Read);
+    }
 
-# Add project root to path
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from tools.builtin.my_tool import MyTool
-from models.tools import ToolResult
-
-
-class TestMyTool:
-    """Test suite for MyTool."""
-
-    def test_basic_functionality(self):
-        """Test the happy path."""
-        tool = MyTool()
-        assert tool.name == "my_tool"
-        assert tool.access_level.value == "read"
-
-    def test_parameter_validation(self):
-        """Test that required parameters are defined."""
-        tool = MyTool()
-        params = tool.get_parameters()
-        assert len(params) > 0
-        assert params[0].required is True
+    #[test]
+    fn test_parameter_validation() {
+        let tool = MyTool::new();
+        let params = tool.parameters();
+        assert!(!params.is_empty());
+        assert!(params[0].required);
+    }
+}
 ```
 
 ### Parametrized Tests
 
-Use `pytest.mark.parametrize` for testing multiple inputs:
+Use the `rstest` crate or a loop for testing multiple inputs:
 
-```python
-import pytest
+```rust
+use rstest::rstest;
 
-@pytest.mark.parametrize("cmd,expected", [
-    ("echo hello", FlagVerdict.READ),
-    ("ls -la", FlagVerdict.READ),
-    ("rm file.txt", FlagVerdict.EXECUTE),
-    ("sed -i 's/a/b/' file.txt", FlagVerdict.WRITE),
-])
-def test_command_classification(cmd, expected):
-    result = evaluate_command(cmd)
-    assert result == expected
+#[rstest]
+#[case("echo hello", FlagVerdict::Read)]
+#[case("ls -la", FlagVerdict::Read)]
+#[case("rm file.txt", FlagVerdict::Execute)]
+#[case("sed -i 's/a/b/' file.txt", FlagVerdict::Write)]
+fn test_command_classification(#[case] cmd: &str, #[case] expected: FlagVerdict) {
+    let result = evaluate_command(cmd);
+    assert_eq!(result, expected);
+}
 ```
 
 ### Async Tests
 
-For testing async functions:
+For testing async functions, use `#[tokio::test]`:
 
-```python
-import asyncio
-import pytest
-
-@pytest.mark.asyncio
-async def test_async_tool_execution():
-    tool = MyTool()
-    ctx = ToolContext(
-        working_directory="/workspace",
-        session_id="test-session",
-        abort_event=asyncio.Event(),
-    )
-    result = await tool.execute({"input": "test"}, ctx)
-    assert not result.is_error
-```
-
-### Using Mocks
-
-```python
-from unittest.mock import AsyncMock, MagicMock, patch
-
-class TestWithMocks:
-    def test_external_dependency(self):
-        with patch("llm.client.LLMClient") as mock_client:
-            mock_client.return_value.chat.return_value = AsyncMock(
-                return_value={"choices": [{"message": {"content": "test"}}]}
-            )
-            # ... test code that uses the LLM client
+```rust
+#[tokio::test]
+async fn test_async_tool_execution() {
+    let tool = MyTool::new();
+    let ctx = ToolContext {
+        working_directory: PathBuf::from("/workspace"),
+        session_id: "test-session".into(),
+        abort_token: CancellationToken::new(),
+    };
+    let result = tool.execute(json!({"input": "test"}), &ctx).await;
+    assert!(!result.is_error);
+}
 ```
 
 ### Testing Security Rules
 
-```python
-from security_engine.shell_parser import parse_command, SecurityVerdict
+```rust
+use dreamforge_security::shell_parser::{parse_command, SecurityVerdict};
 
-class TestSecurityRules:
-    def test_safe_command(self):
-        result = parse_command("echo hello")
-        assert result.verdict == SecurityVerdict.SAFE
+#[test]
+fn test_safe_command() {
+    let result = parse_command("echo hello");
+    assert_eq!(result.verdict, SecurityVerdict::Safe);
+}
 
-    def test_dangerous_injection(self):
-        result = parse_command("echo $(cat /etc/passwd)")
-        assert result.verdict == SecurityVerdict.DANGEROUS
+#[test]
+fn test_dangerous_injection() {
+    let result = parse_command("echo $(cat /etc/passwd)");
+    assert_eq!(result.verdict, SecurityVerdict::Dangerous);
+}
 
-    def test_ask_command(self):
-        result = parse_command("curl https://example.com")
-        assert result.verdict == SecurityVerdict.ASK
+#[test]
+fn test_ask_command() {
+    let result = parse_command("curl https://example.com");
+    assert_eq!(result.verdict, SecurityVerdict::Ask);
+}
 ```
 
 ---
@@ -247,12 +222,12 @@ The `test-setup.js` file configures the test environment (e.g., DOM mocks).
 
 ## Test Conventions
 
-- **File naming:** `test_{module_name}.py` for backend, `{Component}.test.jsx` for frontend
+- **File naming:** `{module_name}.rs` or `test_{module_name}.rs` for backend, `{Component}.test.jsx` for frontend
 - **Class naming:** `TestFeatureName` (PascalCase, prefixed with Test)
 - **Method naming:** `test_what_it_tests` (snake_case, prefixed with test_)
 - **One assertion per concept** — each test should verify one behavior
 - **No external dependencies** — tests should not require a running LLM server, database, or network access
-- **Self-contained imports** — each test file includes its own `sys.path.insert` for the project root
+- **Module imports — each test module uses standard Rust `use` declarations
 
 ---
 

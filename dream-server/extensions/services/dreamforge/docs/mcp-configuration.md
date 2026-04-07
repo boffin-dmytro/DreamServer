@@ -10,7 +10,7 @@ MCP servers communicate via JSON-RPC 2.0 over stdio with Content-Length framing.
 
 ## Configuration File
 
-MCP servers are defined in `config/dreamforge/mcp-servers.json`. Each key in the `servers` object is a unique name used to identify the server and prefix its tools.
+MCP servers are defined in `.forge/settings.json`. Each key in the `servers` object is a unique name used to identify the server and prefix its tools.
 
 ```json
 {
@@ -102,7 +102,7 @@ Open **Settings > MCP Servers** to see:
 
 ## Lifecycle
 
-1. On startup, DreamForge reads `mcp-servers.json`.
+1. On startup, DreamForge reads `.forge/settings.json`.
 2. For each server entry, DreamForge spawns the process, sends an `initialize` request (protocol version `2024-11-05`), and waits for a response.
 3. Sends the `initialized` notification.
 4. Fetches available tools from the server via `tools/list`.
@@ -115,7 +115,7 @@ Servers run as long as DreamForge is running. If a server process crashes, its t
 ## Adding a New MCP Server
 
 1. Find an MCP-compatible server (for example, from the MCP ecosystem or a custom implementation).
-2. Add an entry to `config/dreamforge/mcp-servers.json`:
+2. Add an entry to `.forge/settings.json`:
    ```json
    {
      "servers": {
@@ -162,7 +162,7 @@ Content-Length: 42\r\n\r\n{"jsonrpc":"2.0","method":"...","id":1}
 
 - Check **Settings > MCP Servers** for connection status.
 - Make sure the server implements the `tools/list` method.
-- Restart DreamForge after changing `mcp-servers.json`.
+- Restart DreamForge after changing `.forge/settings.json`.
 
 ### Tool calls timing out
 

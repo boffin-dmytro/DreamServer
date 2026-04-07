@@ -248,7 +248,7 @@ Managed by `useKeyboardShortcuts.js`. Current shortcuts:
 ### Development
 
 ```bash
-cd extensions/services/dreamforge/frontend
+cd rust/frontend
 npm install
 npx vite --port 3010
 ```
