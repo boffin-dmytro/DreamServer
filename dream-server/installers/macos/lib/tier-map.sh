@@ -139,7 +139,7 @@ set_gemma4_tier_config() {
             TIER_NAME="Prosumer"
             LLM_MODEL="gemma-4-e4b-it"
             GGUF_FILE="gemma-4-E4B-it-Q4_K_M.gguf"
-            GGUF_URL="https://huggingface.co/ggml-org/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf"
+            GGUF_URL="https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf"
             GGUF_SHA256=""
             MAX_CONTEXT=32768
             ;;

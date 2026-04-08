@@ -277,7 +277,7 @@ function Resolve-GemmaTierConfig {
                 TierName   = "Prosumer"
                 LlmModel   = "gemma-4-e4b-it"
                 GgufFile   = "gemma-4-E4B-it-Q4_K_M.gguf"
-                GgufUrl    = "https://huggingface.co/ggml-org/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf"
+                GgufUrl    = "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf"
                 GgufSha256 = ""
                 MaxContext = 32768
                 ModelProfileRequested = $RequestedProfile
