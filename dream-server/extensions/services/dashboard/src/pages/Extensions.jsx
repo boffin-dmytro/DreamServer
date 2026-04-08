@@ -366,8 +366,8 @@ function ExtensionCard({ ext, gpuBackend, agentAvailable, onDetails, onConsole, 
   const isCore = ext.source === 'core'
   const isUserExt = ext.source === 'user'
   const isStopped = status === 'stopped'
-  const isToggleable = isUserExt && (status === 'enabled' || status === 'disabled')
-  const showRemove = isUserExt && status === 'disabled'
+  const isToggleable = isUserExt && (status === 'enabled' || status === 'disabled' || isStopped)
+  const showRemove = isUserExt && (status === 'disabled' || isStopped)
   const showInstall = status === 'not_installed' && ext.installable
 
   return (
