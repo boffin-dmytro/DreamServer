@@ -520,6 +520,12 @@ def _serialize_form_values(
 
     for key, field in fields.items():
         value = raw_values.get(key, current_values.get(key, ""))
+        # Reject newlines and null bytes to prevent .env injection
+        if value is not None and any(c in str(value) for c in ("\n", "\r", "\0")):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Value for '{key}' contains invalid characters (newlines or null bytes are not allowed)",
+            )
         if value is None:
             serialized[key] = current_values.get(key, "") if field.get("secret") else ""
             continue

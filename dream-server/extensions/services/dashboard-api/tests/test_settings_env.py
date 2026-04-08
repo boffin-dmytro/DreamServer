@@ -185,3 +185,35 @@ def test_api_settings_env_allows_existing_local_override(test_client, settings_e
     assert response.status_code == 200
     updated_env = env_path.read_text(encoding="utf-8")
     assert "LOCAL_OVERRIDE=updated" in updated_env
+
+
+def test_api_settings_env_rejects_newline_in_value(test_client, settings_env_fixture):
+    response = test_client.put(
+        "/api/settings/env",
+        headers=test_client.auth_headers,
+        json={
+            "mode": "form",
+            "values": {
+                "LLM_BACKEND": "local\nINJECTED_KEY=malicious",
+            },
+        },
+    )
+
+    assert response.status_code == 400
+    assert "invalid characters" in response.json()["detail"]
+
+
+def test_api_settings_env_rejects_null_byte_in_value(test_client, settings_env_fixture):
+    response = test_client.put(
+        "/api/settings/env",
+        headers=test_client.auth_headers,
+        json={
+            "mode": "form",
+            "values": {
+                "LLM_BACKEND": "local\x00injected",
+            },
+        },
+    )
+
+    assert response.status_code == 400
+    assert "invalid characters" in response.json()["detail"]
