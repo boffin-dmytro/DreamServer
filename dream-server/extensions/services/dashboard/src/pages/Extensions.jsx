@@ -52,6 +52,9 @@ const STATUS_STYLES = {
   disabled:      'bg-theme-border text-theme-text-muted',
   not_installed: 'border border-theme-border text-theme-text-muted',
   incompatible:  'bg-orange-500/20 text-orange-400',
+  installing:    'bg-blue-500/20 text-blue-400',
+  setting_up:    'bg-blue-500/20 text-blue-400',
+  error:         'bg-red-500/20 text-red-300',
 }
 
 export default function Extensions() {
@@ -67,14 +70,69 @@ export default function Extensions() {
   const [toast, setToast] = useState(null)
   const [consoleExt, setConsoleExt] = useState(null)
   const [refreshing, setRefreshing] = useState(false)
+  const [progressMap, setProgressMap] = useState({})
+  const installProgressRef = useRef(null)
+  const activePollers = useRef({})
+
+  const pollProgress = (serviceId) => {
+    if (activePollers.current[serviceId]) return
+    activePollers.current[serviceId] = setInterval(async () => {
+      try {
+        const res = await fetchJson(`/api/extensions/${serviceId}/progress`)
+        if (!res.ok) return
+        const data = await res.json()
+        if (data.status === 'idle') return
+        setProgressMap(prev => ({ ...prev, [serviceId]: data }))
+        if (data.status === 'error') {
+          clearInterval(activePollers.current[serviceId])
+          delete activePollers.current[serviceId]
+          setToast({ type: 'error', text: data.error || 'Installation failed' })
+          setProgressMap(prev => { const next = { ...prev }; delete next[serviceId]; return next })
+          fetchCatalog()
+        } else if (data.status === 'started') {
+          // Container is up but healthcheck may not have passed yet.
+          // Refresh catalog — if it shows "enabled", we're done.
+          const catRes = await fetchJson('/api/extensions/catalog')
+          if (!catRes.ok) return
+          const catData = await catRes.json()
+          setCatalog(catData)
+          const ext = catData.extensions?.find(e => e.id === serviceId)
+          if (ext && ext.status === 'enabled') {
+            clearInterval(activePollers.current[serviceId])
+            delete activePollers.current[serviceId]
+            setToast({ type: 'success', text: `Extension installed and started.` })
+            setProgressMap(prev => { const next = { ...prev }; delete next[serviceId]; return next })
+          }
+          // If not yet "enabled", keep polling — healthcheck still running
+        }
+      } catch { /* ignore */ }
+    }, 3000)
+  }
 
   useEffect(() => {
     fetchCatalog()
+    return () => { Object.values(activePollers.current).forEach(clearInterval); activePollers.current = {} }
   }, [])
+
+  // Start polling for installing extensions + fetch progress for error state (after page refresh)
+  useEffect(() => {
+    if (!catalog) return
+    const installing = catalog.extensions.filter(e => e.status === 'installing' || e.status === 'setting_up')
+    installing.forEach(e => pollProgress(e.id))
+    // Fetch progress once for errored extensions to show the error message
+    catalog.extensions.filter(e => e.status === 'error').forEach(async (e) => {
+      try {
+        const res = await fetchJson(`/api/extensions/${e.id}/progress`)
+        if (!res.ok) return
+        const data = await res.json()
+        if (data.status === 'error') setProgressMap(prev => ({ ...prev, [e.id]: data }))
+      } catch { /* ignore */ }
+    })
+  }, [catalog])
 
   useEffect(() => {
     if (toast && toast.type !== 'info') {
-      const t = setTimeout(() => setToast(null), 5000)
+      const t = setTimeout(() => setToast(null), 8000)
       return () => clearTimeout(t)
     }
   }, [toast])
@@ -106,6 +164,7 @@ export default function Extensions() {
   const handleMutation = async (serviceId, action) => {
     setMutating(serviceId)
     setConfirm(null)
+
     try {
       const url = action === 'uninstall'
         ? `/api/extensions/${serviceId}`
@@ -114,7 +173,7 @@ export default function Extensions() {
         : `/api/extensions/${serviceId}/${action}`
       const opts = {
         method: action === 'uninstall' || action === 'purge' ? 'DELETE' : 'POST',
-        signal: AbortSignal.timeout(120000),
+        signal: AbortSignal.timeout(300000),
       }
       if (action === 'purge') {
         opts.headers = { 'Content-Type': 'application/json' }
@@ -126,22 +185,31 @@ export default function Extensions() {
         throw new Error(err.detail || `Failed to ${action}`)
       }
       const data = await res.json()
-      let successText = data.message || (
-        action === 'uninstall' ? 'Extension removed' :
-        action === 'purge' ? `Data purged — ${data.size_gb_freed ?? 0} GB freed` :
-        `Extension ${action}d`
-      )
-      if (data.data_info) {
-        successText += ` Data preserved (${data.data_info.size_gb} GB) — purge to remove.`
-      }
-      if (data.restart_required) {
-        setToast({ type: 'info', text: `${successText} — restart needed to apply.` })
+
+      if (action === 'install' || action === 'enable') {
+        // Refresh catalog to show "installing" state, then let the
+        // catalog-driven poller handle the rest (toast + final refresh)
+        await fetchCatalog()
+        pollProgress(serviceId)
       } else {
-        setToast({ type: 'success', text: successText })
+        let successText = data.message || (
+          action === 'uninstall' ? 'Extension removed' :
+          action === 'purge' ? `Data purged — ${data.size_gb_freed ?? 0} GB freed` :
+          `Extension ${action}d`
+        )
+        if (data.data_info) {
+          successText += ` Data preserved (${data.data_info.size_gb} GB) — purge to remove.`
+        }
+        if (data.restart_required) {
+          setToast({ type: 'info', text: `${successText} — restart needed to apply.` })
+        } else {
+          setToast({ type: 'success', text: successText })
+        }
+        await fetchCatalog()
       }
-      await fetchCatalog()
     } catch (err) {
-      setToast({ type: 'error', text: friendlyError(err.message) || `Failed to ${action} extension` })
+      const base = friendlyError(err.message) || `Failed to ${action} extension`
+      setToast({ type: 'error', text: base })
     } finally {
       setMutating(null)
     }
@@ -176,8 +244,8 @@ export default function Extensions() {
       .filter(Boolean)
   )]
 
-  const STATUS_FILTERS = ['all', 'enabled', 'stopped', 'disabled', 'not_installed', 'incompatible']
-  const STATUS_LABELS = { all: 'All', enabled: 'Enabled', stopped: 'Stopped', disabled: 'Disabled', not_installed: 'Not Installed', incompatible: 'Incompatible' }
+  const STATUS_FILTERS = ['all', 'enabled', 'stopped', 'disabled', 'installing', 'setting_up', 'error', 'not_installed', 'incompatible']
+  const STATUS_LABELS = { all: 'All', enabled: 'Enabled', stopped: 'Stopped', disabled: 'Disabled', installing: 'Installing', setting_up: 'Setting Up', error: 'Error', not_installed: 'Not Installed', incompatible: 'Incompatible' }
 
   // Filter extensions
   const query = search.toLowerCase()
@@ -231,6 +299,8 @@ export default function Extensions() {
           <SummaryItem label="Installed" value={summary.installed ?? 0} color="bg-green-500" />
           <SummaryItem label="Stopped" value={summary.stopped ?? 0} color="bg-red-500" />
           <SummaryItem label="Available" value={summary.not_installed ?? 0} color="bg-theme-accent" />
+          <SummaryItem label="Installing" value={summary.installing ?? 0} color="bg-blue-500" />
+          <SummaryItem label="Error" value={summary.error ?? 0} color="bg-red-500" />
           <SummaryItem label="Incompatible" value={summary.incompatible ?? 0} color="bg-orange-500" />
         </div>
       </div>
@@ -305,6 +375,7 @@ export default function Extensions() {
               onConsole={() => setConsoleExt(ext)}
               onAction={requestAction}
               mutating={mutating}
+              progressData={progressMap[ext.id]}
             />
           ))}
         </div>
@@ -371,7 +442,7 @@ function SummaryItem({ label, value, color }) {
   )
 }
 
-function ExtensionCard({ ext, gpuBackend, agentAvailable, onDetails, onConsole, onAction, mutating }) {
+function ExtensionCard({ ext, gpuBackend, agentAvailable, onDetails, onConsole, onAction, mutating, progressData }) {
   const iconName = ext.features?.[0]?.icon
   const Icon = (iconName && ICON_MAP[iconName]) || Package
   const status = ext.status || 'not_installed'
@@ -384,9 +455,10 @@ function ExtensionCard({ ext, gpuBackend, agentAvailable, onDetails, onConsole, 
 
   const isCore = ext.source === 'core'
   const isUserExt = ext.source === 'user'
+  const isError = status === 'error'
   const isStopped = status === 'stopped'
   const isToggleable = isUserExt && (status === 'enabled' || status === 'disabled' || isStopped)
-  const showRemove = isUserExt && status === 'disabled'
+  const showRemove = isUserExt && (status === 'disabled' || isError)
   const showInstall = status === 'not_installed' && ext.installable
 
   return (
@@ -401,12 +473,16 @@ function ExtensionCard({ ext, gpuBackend, agentAvailable, onDetails, onConsole, 
               status === 'enabled' ? 'bg-green-500/10' :
               status === 'stopped' ? 'bg-red-500/10' :
               status === 'incompatible' ? 'bg-orange-500/10' :
+              (status === 'installing' || status === 'setting_up') ? 'bg-blue-500/10' :
+              status === 'error' ? 'bg-red-500/10' :
               'bg-theme-card'
             }`}>
               <Icon size={16} className={
                 status === 'enabled' ? 'text-green-400' :
                 status === 'stopped' ? 'text-red-400' :
                 status === 'incompatible' ? 'text-orange-400' :
+                (status === 'installing' || status === 'setting_up') ? 'text-blue-400' :
+                status === 'error' ? 'text-red-400' :
                 'text-theme-text-muted'
               } />
             </div>
@@ -424,6 +500,19 @@ function ExtensionCard({ ext, gpuBackend, agentAvailable, onDetails, onConsole, 
                 title="Built-in service — managed by DreamServer"
               >
                 core
+              </span>
+            ) : (status === 'installing' || status === 'setting_up') ? (
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-400 flex items-center gap-1">
+                <Loader2 size={8} className="animate-spin" />
+                {status === 'setting_up' ? 'setting up' : 'installing'}
+              </span>
+            ) : status === 'error' ? (
+              <span
+                className="text-[10px] px-2 py-0.5 rounded-full bg-red-500/20 text-red-300 cursor-pointer"
+                onClick={onConsole}
+                title="View error details"
+              >
+                error
               </span>
             ) : (
               <span
@@ -456,6 +545,20 @@ function ExtensionCard({ ext, gpuBackend, agentAvailable, onDetails, onConsole, 
         <p className="text-xs text-theme-text-muted line-clamp-2 leading-relaxed">{ext.description || 'No description available.'}</p>
       </div>
 
+      {/* Progress indicator — shows during active install/setup, survives page refresh */}
+      {(progressData || ext.status === 'installing' || ext.status === 'setting_up') && (
+        <div className="px-4 py-2 border-t border-theme-border/60 text-xs text-blue-300 flex items-center gap-2">
+          <Loader2 size={12} className="animate-spin" />
+          <span>{progressData?.phase_label || (ext.status === 'setting_up' ? 'Running setup...' : 'Installing...')}</span>
+        </div>
+      )}
+      {/* Error message */}
+      {ext.status === 'error' && progressData?.error && (
+        <div className="px-4 py-2 border-t border-red-500/30 text-xs text-red-300 leading-relaxed">
+          {progressData.error.length > 200 ? progressData.error.slice(0, 200) + '...' : progressData.error}
+        </div>
+      )}
+
       {/* Card footer */}
       <div className="border-t border-theme-border/60 px-4 py-2.5 flex items-center justify-between bg-theme-card/30">
         <div className="flex gap-1.5">
@@ -479,6 +582,16 @@ function ExtensionCard({ ext, gpuBackend, agentAvailable, onDetails, onConsole, 
               {isMutating ? <Loader2 size={12} className="animate-spin" /> : 'Start'}
             </button>
           )}
+          {isError && (
+            <button
+              disabled={actionDisabled}
+              title={disabledTitle}
+              onClick={() => onAction(ext, 'enable')}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-blue-500/20 text-blue-300 hover:bg-blue-500/30 transition-colors disabled:opacity-50"
+            >
+              {isMutating ? <Loader2 size={12} className="animate-spin" /> : <><RefreshCw size={12} /> Retry</>}
+            </button>
+          )}
           {showRemove && (
             <button
               disabled={actionDisabled}
@@ -489,7 +602,7 @@ function ExtensionCard({ ext, gpuBackend, agentAvailable, onDetails, onConsole, 
               {isMutating ? <Loader2 size={12} className="animate-spin" /> : <><Trash2 size={12} /> Remove</>}
             </button>
           )}
-          {showRemove && (
+          {showRemove && ext.has_data && (
             <button
               disabled={actionDisabled}
               title={disabledTitle || 'Permanently delete service data'}
@@ -708,6 +821,7 @@ function ConsoleModal({ ext, onClose }) {
   const [error, setError] = useState(null)
   const [disconnected, setDisconnected] = useState(false)
   const [atBottom, setAtBottom] = useState(true)
+  const [installInfo, setInstallInfo] = useState(null)
   const logRef = useRef(null)
   const isNearBottom = useRef(true)
 
@@ -716,6 +830,23 @@ function ConsoleModal({ ext, onClose }) {
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
   }, [onClose])
+
+  // Fetch install progress info
+  useEffect(() => {
+    let active = true
+    const fetchProgress = async () => {
+      try {
+        const res = await fetchJson(`/api/extensions/${ext.id}/progress`)
+        if (res.ok && active) {
+          const data = await res.json()
+          if (data.status !== 'idle') setInstallInfo(data)
+        }
+      } catch { /* ignore */ }
+    }
+    fetchProgress()
+    const interval = setInterval(fetchProgress, 5000)
+    return () => { active = false; clearInterval(interval) }
+  }, [ext.id])
 
   useEffect(() => {
     let active = true
@@ -817,6 +948,26 @@ function ConsoleModal({ ext, onClose }) {
             <X size={16} />
           </button>
         </div>
+        {installInfo && (
+          <div className={`px-4 py-2 border-b text-xs flex items-center gap-2 ${
+            installInfo.status === 'error' ? 'border-red-500/30 bg-red-500/10 text-red-300' :
+            installInfo.status === 'started' ? 'border-green-500/30 bg-green-500/10 text-green-300' :
+            'border-blue-500/30 bg-blue-500/10 text-blue-300'
+          }`}>
+            {installInfo.status !== 'error' && installInfo.status !== 'started' && (
+              <Loader2 size={12} className="animate-spin" />
+            )}
+            <span className="font-medium">{installInfo.phase_label || installInfo.status}</span>
+            {installInfo.error && (
+              <span className="ml-2 text-red-300">— {installInfo.error}</span>
+            )}
+            {installInfo.started_at && (
+              <span className="ml-auto text-theme-text-muted">
+                {new Date(installInfo.started_at).toLocaleTimeString()}
+              </span>
+            )}
+          </div>
+        )}
         <div className="relative flex-1">
           <div
             ref={el => { logRef.current = el }}
