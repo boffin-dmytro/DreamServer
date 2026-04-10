@@ -641,3 +641,48 @@ async def test_template_apply_already_enabled_still_starts(tmp_path):
     # _call_agent should have been called for svc-a (start attempt)
     mock_agent.assert_called()
     assert result["enabled_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_template_apply_invalidates_compose_flags_cache(tmp_path):
+    """Applying a template must invalidate .compose-flags so dream-cli sees the new stack."""
+    mock_templates = [{
+        "id": "test-tmpl",
+        "name": "Test",
+        "services": ["svc-b"],
+    }]
+
+    class MockSvc:
+        def __init__(self, id_, status):
+            self.id = id_
+            self.status = status
+
+    mock_activate = MagicMock(return_value={"id": "svc-b", "action": "enabled"})
+    mock_invalidate = MagicMock()
+    mock_lock = MagicMock()
+    mock_lock.__enter__ = MagicMock(return_value=None)
+    mock_lock.__exit__ = MagicMock(return_value=False)
+
+    with (
+        patch("routers.templates.TEMPLATES", mock_templates),
+        patch("routers.templates._BASE_COMPOSE_SERVICES", frozenset()),
+        patch("routers.templates.USER_EXTENSIONS_DIR", tmp_path / "user-ext"),
+        patch("helpers.get_cached_services", return_value=[]),
+        patch("routers.extensions._activate_service", mock_activate),
+        patch("routers.extensions._extensions_lock", return_value=mock_lock),
+        patch("routers.extensions._get_missing_deps_transitive", return_value=[]),
+        patch("routers.extensions._call_agent", return_value=True),
+        patch("routers.extensions._call_agent_hook", return_value=True),
+        patch("routers.extensions._validate_service_id"),
+        patch(
+            "routers.extensions._call_agent_invalidate_compose_cache",
+            mock_invalidate,
+        ),
+    ):
+        user_ext = tmp_path / "user-ext" / "svc-b"
+        user_ext.mkdir(parents=True)
+        from routers.templates import apply_template
+        await apply_template("test-tmpl", api_key="test")
+
+    # Cache invalidation must fire at least once for the activation path.
+    assert mock_invalidate.called, "apply_template must invalidate .compose-flags cache"

@@ -111,6 +111,7 @@ async def apply_template(template_id: str, api_key: str = Depends(verify_api_key
         _activate_service, _extensions_lock, _call_agent, _call_agent_hook,
         _get_missing_deps_transitive, _validate_service_id,
         _install_from_library, _is_installable,
+        _call_agent_invalidate_compose_cache,
     )
 
     service_list = get_cached_services()
@@ -146,6 +147,7 @@ async def apply_template(template_id: str, api_key: str = Depends(verify_api_key
                 try:
                     with _extensions_lock():
                         _install_from_library(svc_id)
+                        _call_agent_invalidate_compose_cache()
                     _call_agent_hook(svc_id, "post_install")
                     library_installed.append(svc_id)
                 except HTTPException as exc:
@@ -162,6 +164,7 @@ async def apply_template(template_id: str, api_key: str = Depends(verify_api_key
             missing_deps = _get_missing_deps_transitive(svc_id)
 
             with _extensions_lock():
+                activated_any = False
                 for dep in missing_deps:
                     if dep in results:
                         continue
@@ -169,7 +172,10 @@ async def apply_template(template_id: str, api_key: str = Depends(verify_api_key
                     if dep_result.get("action") == "enabled":
                         enabled_services.append(dep)
                         results[dep] = "enabled_as_dependency"
+                        activated_any = True
                 result = _activate_service(svc_id)
+                if activated_any or result.get("action") == "enabled":
+                    _call_agent_invalidate_compose_cache()
 
             action = result.get("action", "skipped")
             if svc_id in library_installed:
@@ -194,7 +200,7 @@ async def apply_template(template_id: str, api_key: str = Depends(verify_api_key
             start_ok = _call_agent("start", svc_id)
             if not start_ok:
                 # Preserve library_installed label — user-visible install succeeded,
-                # only the start call failed (e.g., stale .compose-flags cache).
+                # only the start call failed.
                 if results.get(svc_id) != "library_installed":
                     results[svc_id] = "enabled_but_start_failed"
                 else:

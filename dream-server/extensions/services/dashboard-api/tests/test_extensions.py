@@ -745,6 +745,69 @@ class TestUninstallExtension:
         assert resp.status_code == 401
 
 
+# --- Compose-flags cache invalidation ---
+
+
+class TestComposeCacheInvalidation:
+    """Every successful compose mutation must invalidate the host .compose-flags cache."""
+
+    def _spy(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(
+            "routers.extensions._call_agent_invalidate_compose_cache",
+            lambda: calls.append(1),
+        )
+        return calls
+
+    def test_install_invalidates_cache(self, test_client, monkeypatch, tmp_path):
+        lib_dir = _setup_library_ext(tmp_path, "my-ext")
+        _patch_mutation_config(monkeypatch, tmp_path, lib_dir=lib_dir)
+        calls = self._spy(monkeypatch)
+
+        resp = test_client.post(
+            "/api/extensions/my-ext/install",
+            headers=test_client.auth_headers,
+        )
+        assert resp.status_code == 200
+        assert len(calls) == 1
+
+    def test_enable_invalidates_cache(self, test_client, monkeypatch, tmp_path):
+        user_dir = _setup_user_ext(tmp_path, "my-ext", enabled=False)
+        _patch_mutation_config(monkeypatch, tmp_path, user_dir=user_dir)
+        calls = self._spy(monkeypatch)
+
+        resp = test_client.post(
+            "/api/extensions/my-ext/enable",
+            headers=test_client.auth_headers,
+        )
+        assert resp.status_code == 200
+        assert len(calls) == 1
+
+    def test_disable_invalidates_cache(self, test_client, monkeypatch, tmp_path):
+        user_dir = _setup_user_ext(tmp_path, "my-ext", enabled=True)
+        _patch_mutation_config(monkeypatch, tmp_path, user_dir=user_dir)
+        calls = self._spy(monkeypatch)
+
+        resp = test_client.post(
+            "/api/extensions/my-ext/disable",
+            headers=test_client.auth_headers,
+        )
+        assert resp.status_code == 200
+        assert len(calls) == 1
+
+    def test_uninstall_invalidates_cache(self, test_client, monkeypatch, tmp_path):
+        user_dir = _setup_user_ext(tmp_path, "my-ext", enabled=False)
+        _patch_mutation_config(monkeypatch, tmp_path, user_dir=user_dir)
+        calls = self._spy(monkeypatch)
+
+        resp = test_client.delete(
+            "/api/extensions/my-ext",
+            headers=test_client.auth_headers,
+        )
+        assert resp.status_code == 200
+        assert len(calls) == 1
+
+
 # --- Path traversal on mutation endpoints ---
 
 

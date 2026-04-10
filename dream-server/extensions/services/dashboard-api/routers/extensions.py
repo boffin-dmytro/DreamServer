@@ -417,6 +417,23 @@ def _call_agent(action: str, service_id: str) -> bool:
         return False
 
 
+def _call_agent_invalidate_compose_cache() -> None:
+    """Ask host agent to drop the .compose-flags cache after a compose mutation."""
+    url = f"{AGENT_URL}/v1/compose/invalidate-cache"
+    headers = {"Authorization": f"Bearer {DREAM_AGENT_KEY}"}
+    req = urllib.request.Request(url, data=b"", headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=_AGENT_LOG_TIMEOUT) as resp:
+            if resp.status != 200:
+                logger.warning(
+                    "compose-flags cache invalidation returned HTTP %d", resp.status,
+                )
+    except Exception:
+        logger.warning(
+            "Host agent unreachable for compose-flags invalidation at %s", AGENT_URL,
+        )
+
+
 def _call_agent_setup_hook(service_id: str) -> bool:
     """Call host agent to run setup_hook for an extension. Returns True on success.
 
@@ -866,6 +883,7 @@ def install_extension(service_id: str, api_key: str = Depends(verify_api_key)):
     # Atomic install via shared helper (used by templates too)
     with _extensions_lock():
         _install_from_library(service_id)
+        _call_agent_invalidate_compose_cache()
 
     # Write initial progress file so status shows "installing" immediately
     # (before host agent starts processing — closes the race window)
@@ -1078,6 +1096,10 @@ def enable_extension(
         if result.get("action") == "enabled":
             enabled_services.append(service_id)
 
+        # Invalidate .compose-flags cache so dream-cli picks up the new enabled set
+        if enabled_services:
+            _call_agent_invalidate_compose_cache()
+
     # Start all enabled services via agent (outside lock)
     agent_ok = True
     for svc_id in enabled_services:
@@ -1164,6 +1186,7 @@ def disable_extension(service_id: str, include_data_info: bool = Query(True), ap
             )
 
         os.rename(str(enabled_compose), str(disabled_compose))
+        _call_agent_invalidate_compose_cache()
 
     logger.info("Disabled extension: %s", service_id)
 
@@ -1223,6 +1246,7 @@ def uninstall_extension(service_id: str, include_data_info: bool = Query(True), 
         except OSError as e:
             logger.error("Failed to remove extension %s: %s", service_id, e)
             raise HTTPException(status_code=500, detail=f"Failed to remove extension files: {e}")
+        _call_agent_invalidate_compose_cache()
 
     logger.info("Uninstalled extension: %s", service_id)
     return {

@@ -111,6 +111,11 @@ def load_core_service_ids(config_path: Path) -> set:
         return set(_FALLBACK_CORE_IDS)
 
 
+def invalidate_compose_cache() -> None:
+    """Drop the saved .compose-flags cache so the next resolve re-runs the script."""
+    (INSTALL_DIR / ".compose-flags").unlink(missing_ok=True)
+
+
 def resolve_compose_flags() -> list:
     flags_file = INSTALL_DIR / ".compose-flags"
     if flags_file.exists():
@@ -598,8 +603,18 @@ class AgentHandler(BaseHTTPRequestHandler):
             self._handle_model_activate()
         elif self.path == "/v1/model/delete":
             self._handle_model_delete()
+        elif self.path == "/v1/compose/invalidate-cache":
+            self._handle_invalidate_compose_cache()
         else:
             json_response(self, 404, {"error": "Not found"})
+
+    def _handle_invalidate_compose_cache(self):
+        """Drop the .compose-flags cache file so the next CLI call re-resolves it."""
+        if not check_auth(self):
+            return
+        invalidate_compose_cache()
+        logger.info("compose-flags cache invalidated")
+        json_response(self, 200, {"status": "ok"})
 
     def _handle_core_recreate(self):
         if not check_auth(self):
