@@ -1019,7 +1019,7 @@ class AgentHandler(BaseHTTPRequestHandler):
 
                         if not success:
                             part_tmp.unlink(missing_ok=True)
-                            _write_model_status(status_path, "failed", part_label, 0, part_total, f"Download failed after 3 attempts")
+                            _write_model_status(status_path, "failed", part_label, 0, part_total, "Download failed after 3 attempts")
                             return
 
                     # Verify SHA256 if provided (single-file only)
@@ -1335,7 +1335,6 @@ def _recreate_llama_server(env: dict, override_image: str = ""):
         logger.error("Failed to inspect %s: %s", container, result.stderr)
         return
 
-    import copy
     config = json.loads(result.stdout)[0]
 
     # Build new command: replace --model and --ctx-size values
