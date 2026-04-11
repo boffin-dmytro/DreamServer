@@ -9,6 +9,7 @@ import pytest
 import yaml
 from fastapi import HTTPException
 from models import ServiceStatus
+from routers.extensions import _assert_not_core
 
 
 # --- Helpers ---
@@ -1589,7 +1590,7 @@ class TestPurgeExtensionData:
         )
 
         assert resp.status_code == 403
-        assert "core service" in resp.json()["detail"].lower()
+        assert "always-on service" in resp.json()["detail"].lower()
 
     def test_purge_404_invalid_id(self, test_client, monkeypatch, tmp_path):
         """404 for service_id that fails regex validation."""
@@ -2184,3 +2185,25 @@ class TestActivateServiceBuiltinBranch:
         assert not (user_ext / "compose.yaml.disabled").exists()
         # Built-in untouched
         assert builtin_compose.exists()
+
+
+class TestAssertNotCoreAllowsBuiltins:
+    """_assert_not_core blocks only the 4 always-on base-compose services."""
+
+    @pytest.mark.parametrize("service_id", [
+        "n8n", "tts", "whisper", "comfyui", "litellm", "openclaw",
+        "perplexica", "searxng", "privacy-shield", "token-spy", "qdrant",
+        "embeddings", "ape", "dreamforge", "langfuse", "opencode",
+    ])
+    def test_assert_not_core_allows_builtin_extension(self, service_id):
+        """Built-in extensions are toggleable and must not be blocked."""
+        _assert_not_core(service_id)
+
+    @pytest.mark.parametrize("service_id", [
+        "llama-server", "open-webui", "dashboard", "dashboard-api",
+    ])
+    def test_assert_not_core_blocks_always_on(self, service_id):
+        """Always-on base-compose services must raise 403."""
+        with pytest.raises(HTTPException) as exc_info:
+            _assert_not_core(service_id)
+        assert exc_info.value.status_code == 403
