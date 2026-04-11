@@ -99,10 +99,11 @@ export default function Models() {
       {/* Models Grid */}
       <div className="grid gap-4">
         {models.map(model => (
-          <ModelCard 
-            key={model.id} 
+          <ModelCard
+            key={model.id}
             model={model}
             isLoading={actionLoading === model.id}
+            downloadBusy={downloadProgress.isDownloading}
             onDownload={() => downloadModel(model.id)}
             onLoad={() => loadModel(model.id)}
             onDelete={() => deleteModel(model.id)}
@@ -119,7 +120,7 @@ export default function Models() {
   )
 }
 
-function ModelCard({ model, isLoading, onDownload, onLoad, onDelete }) {
+function ModelCard({ model, isLoading, downloadBusy, onDownload, onLoad, onDelete }) {
   const isLoaded = model.status === 'loaded'
   const isDownloaded = model.status === 'downloaded'
   const isAvailable = model.status === 'available'
@@ -200,8 +201,9 @@ function ModelCard({ model, isLoading, onDownload, onLoad, onDelete }) {
         {/* Action Buttons */}
         <div className="flex items-center gap-2 ml-4">
           {isLoading ? (
-            <div className="px-4 py-2 bg-theme-border text-theme-text rounded-lg">
+            <div className="px-4 py-2 bg-theme-accent/20 text-theme-accent rounded-lg text-sm font-medium flex items-center gap-2">
               <Loader2 size={16} className="animate-spin" />
+              Loading...
             </div>
           ) : isLoaded ? (
             <span className="px-4 py-2 bg-green-600/20 text-green-400 rounded-lg text-sm font-medium">
@@ -230,8 +232,16 @@ function ModelCard({ model, isLoading, onDownload, onLoad, onDelete }) {
                 <Trash2 size={16} />
               </button>
             </>
+          ) : downloadBusy ? (
+            <button
+              disabled
+              className="px-4 py-2 bg-theme-border text-theme-text-muted rounded-lg text-sm font-medium flex items-center gap-2 cursor-not-allowed"
+            >
+              <Loader2 size={16} className="animate-spin" />
+              Waiting
+            </button>
           ) : (
-            <button 
+            <button
               onClick={onDownload}
               className="px-4 py-2 bg-theme-accent hover:bg-theme-accent-hover text-white rounded-lg text-sm font-medium flex items-center gap-2 transition-colors"
             >
@@ -271,7 +281,9 @@ function DownloadProgressBar({ progress, helpers }) {
             <span className="absolute -top-1 -right-1 w-2 h-2 bg-theme-accent rounded-full animate-pulse" />
           </div>
           <div>
-            <p className="text-theme-text font-medium">Downloading {progress.model}</p>
+            <p className="text-theme-text font-medium">
+              {progress.status === 'verifying' ? 'Verifying' : 'Downloading'} {progress.model}
+            </p>
             <p className="text-sm text-theme-text-muted">
               {formatBytes(progress.bytesDownloaded)} / {formatBytes(progress.bytesTotal)}
               {progress.speedMbps > 0 && ` • ${progress.speedMbps.toFixed(1)} MB/s`}

@@ -403,6 +403,80 @@ _regenerate_compose_flags() {
     fi
 }
 
+# Run a lifecycle hook for a service (reads manifest directly via Python)
+_run_hook() {
+    local service_id="$1" hook_name="$2"
+    local ext_dir="$INSTALL_DIR/extensions/services/$service_id"
+    # Also check user-extensions
+    [[ -d "$ext_dir" ]] || ext_dir="$INSTALL_DIR/data/user-extensions/$service_id"
+    [[ -d "$ext_dir" ]] || return 0
+
+    local hook_path
+    hook_path=$(python3 - "$ext_dir" "$hook_name" <<'PYEOF'
+import yaml, sys
+from pathlib import Path
+
+ext_dir = Path(sys.argv[1])
+hook_name = sys.argv[2]
+
+manifest_path = None
+for name in ("manifest.yaml", "manifest.yml"):
+    candidate = ext_dir / name
+    if candidate.exists():
+        manifest_path = candidate
+        break
+if manifest_path is None:
+    sys.exit(0)
+
+with open(manifest_path) as f:
+    m = yaml.safe_load(f)
+if not isinstance(m, dict):
+    sys.exit(0)
+service = m.get("service", {})
+if not isinstance(service, dict):
+    sys.exit(0)
+
+# Check hooks map first
+hooks = service.get("hooks", {})
+hook_script = ""
+if isinstance(hooks, dict):
+    hook_script = hooks.get(hook_name, "")
+
+# Fallback: setup_hook -> post_install only
+if not hook_script and hook_name == "post_install":
+    hook_script = service.get("setup_hook", "")
+
+if not hook_script:
+    sys.exit(0)
+
+# Validate path containment
+hook_path = (ext_dir / hook_script).resolve()
+try:
+    hook_path.relative_to(ext_dir.resolve())
+except ValueError:
+    print(f"ERROR: hook path escapes extension directory: {hook_script}", file=sys.stderr)
+    sys.exit(1)
+
+if not hook_path.is_file():
+    sys.exit(0)
+
+print(str(hook_path))
+PYEOF
+    ) || return 0
+
+    [[ -z "$hook_path" || ! -f "$hook_path" ]] && return 0
+
+    log "Running $hook_name hook for $service_id..."
+    SERVICE_ID="$service_id" \
+    SERVICE_PORT="${SERVICE_PORTS[$service_id]:-0}" \
+    SERVICE_DATA_DIR="$INSTALL_DIR/data/$service_id" \
+    DREAM_VERSION="$VERSION" \
+    GPU_BACKEND="${GPU_BACKEND:-}" \
+    HOOK_NAME="$hook_name" \
+        bash "$hook_path" "$INSTALL_DIR" "${GPU_BACKEND:-}" \
+        || warn "$hook_name hook failed for $service_id (non-fatal)"
+}
+
 # Build full compose flags: base + GPU overlay + enabled extensions
 get_compose_flags() {
     # Fast path: use saved flags from installer if available
@@ -724,6 +798,7 @@ cmd_start() {
     cd "$INSTALL_DIR"
     load_env
     ensure_llama_cpu_budget
+    sr_load
 
     local service="${1:-}"
     local flags_str
@@ -737,9 +812,11 @@ cmd_start() {
         success "All services started"
     else
         service=$(resolve_service "$service")
+        _run_hook "$service" "pre_start"
         log "Starting $service..."
         docker compose "${flags[@]}" up -d "$service"
         success "$service started"
+        _run_hook "$service" "post_start"
     fi
 }
 
@@ -1478,7 +1555,94 @@ cmd_disable() {
     docker compose "${flags[@]}" stop "$service_id" 2>/dev/null || true
     [[ -f "$cf" ]] && mv "$cf" "${cf}.disabled"
     _regenerate_compose_flags
-    success "$service_id disabled."
+    local _data_dir="$INSTALL_DIR/data/$service_id"
+    if [[ -d "$_data_dir" ]]; then
+        local _data_size
+        _data_size=$(du -sh "$_data_dir" 2>/dev/null | cut -f1)
+        success "$service_id disabled. Data preserved (${_data_size} in data/$service_id). Use 'dream purge $service_id' to delete."
+    else
+        success "$service_id disabled."
+    fi
+}
+
+cmd_purge() {
+    check_install
+    sr_load
+
+    if [[ $# -lt 1 ]]; then
+        error "Usage: dream purge <service>"
+    fi
+
+    local service_id
+    service_id=$(sr_resolve "$1")
+
+    # Validate against known service IDs
+    local _found=false
+    for _sid in "${SERVICE_IDS[@]}"; do
+        if [[ "$_sid" == "$service_id" ]]; then
+            _found=true
+            break
+        fi
+    done
+    if ! $_found; then
+        error "Unknown service: $service_id"
+    fi
+
+    # Block core services
+    local _cat="${SERVICE_CATEGORIES[$service_id]:-optional}"
+    if [[ "$_cat" == "core" ]]; then
+        error "Cannot purge core service data: $service_id"
+    fi
+
+    # Check if service is still enabled (compose.yaml exists = enabled)
+    local _cf="$INSTALL_DIR/extensions/services/$service_id/compose.yaml"
+    if [[ -f "$_cf" ]]; then
+        error "$service_id is still enabled. Run 'dream disable $service_id' first."
+    fi
+
+    # Check if container is still running (disable may have failed to stop it)
+    local _container="${SERVICE_CONTAINERS[$service_id]:-dream-$service_id}"
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${_container}$"; then
+        error "$service_id container is still running. Run 'dream stop $service_id' first."
+    fi
+
+    # Check data directory exists
+    local _data_dir="$INSTALL_DIR/data/$service_id"
+    if [[ ! -d "$_data_dir" ]]; then
+        log "No data directory found for $service_id."
+        return 0
+    fi
+
+    # Show size and confirm
+    local _data_size
+    _data_size=$(du -sh "$_data_dir" 2>/dev/null | cut -f1)
+    warn "This will permanently delete all data for $service_id (${_data_size})."
+    warn "Directory: $_data_dir"
+    log ""
+
+    local _confirm
+    read -p "  Type '$service_id' to confirm deletion: " -r _confirm
+    if [[ "$_confirm" != "$service_id" ]]; then
+        log "Purge cancelled."
+        return 0
+    fi
+
+    # Delete data — try direct rm first, fall back to docker for root-owned files
+    rm -rf "$_data_dir" 2>/dev/null || true
+    if [[ -d "$_data_dir" ]]; then
+        log "Some files are owned by root (created by Docker). Removing via container..."
+        if command -v docker &>/dev/null; then
+            docker run --rm -v "$_data_dir:/purge-target" alpine \
+                sh -c 'rm -rf /purge-target/* /purge-target/.[!.]* 2>/dev/null; true' 2>/dev/null \
+                || warn "Docker cleanup failed (non-fatal)"
+            rm -rf "$_data_dir" 2>/dev/null || true
+        fi
+        if [[ -d "$_data_dir" ]]; then
+            error "Could not fully remove $_data_dir. Try: sudo rm -rf $_data_dir"
+        fi
+    fi
+
+    success "Purged $service_id data (${_data_size} freed)."
 }
 
 cmd_list() {
@@ -2836,6 +3000,178 @@ cmd_repair() {
     log "Run 'dream doctor' to diagnose issues, then check the output for suggested fixes."
 }
 
+#=============================================================================
+# Templates
+#=============================================================================
+_template_list() {
+    local templates_dir="$INSTALL_DIR/templates"
+    if [[ ! -d "$templates_dir" ]]; then
+        warn "No templates directory found at $templates_dir"
+        return 0
+    fi
+
+    local found=0
+    printf "${CYAN}%-20s %-30s %-6s %s${NC}\n" "ID" "NAME" "TIER" "SERVICES"
+    printf "%-20s %-30s %-6s %s\n" "----" "----" "----" "--------"
+
+    for f in "$templates_dir"/*.yaml "$templates_dir"/*.yml; do
+        [[ -f "$f" ]] || continue
+        local info
+        info=$(python3 - "$f" <<'PYEOF'
+import yaml, sys
+with open(sys.argv[1]) as fh:
+    d = yaml.safe_load(fh)
+if not isinstance(d, dict) or d.get("schema_version") != "dream.templates.v1":
+    sys.exit(0)
+t = d.get("template", {})
+tid = t.get("id", "")
+name = t.get("name", "")
+tier = t.get("tier_minimum", "-")
+svcs = ", ".join(t.get("services", []))
+if tid:
+    print(f"{tid}\t{name}\t{tier}\t{svcs}")
+PYEOF
+        ) || continue
+        [[ -z "$info" ]] && continue
+        IFS=$'\t' read -r tid tname ttier tsvcs <<< "$info"
+        printf "%-20s %-30s %-6s %s\n" "$tid" "$tname" "$ttier" "$tsvcs"
+        found=1
+    done
+
+    if [[ "$found" -eq 0 ]]; then
+        log "No templates found."
+    fi
+}
+
+_template_preview() {
+    local template_id="${1:-}"
+    [[ -z "$template_id" ]] && { log "Usage: dream template preview <template-id>"; exit 1; }
+
+    local templates_dir="$INSTALL_DIR/templates"
+    local tmpl_file=""
+    for f in "$templates_dir"/*.yaml "$templates_dir"/*.yml; do
+        [[ -f "$f" ]] || continue
+        local tid
+        tid=$(python3 - "$f" <<'PYEOF'
+import yaml, sys
+with open(sys.argv[1]) as fh:
+    d = yaml.safe_load(fh)
+if not isinstance(d, dict) or d.get("schema_version") != "dream.templates.v1":
+    sys.exit(0)
+t = d.get("template", {})
+print(t.get("id", ""))
+PYEOF
+        ) || continue
+        if [[ "$tid" == "$template_id" ]]; then
+            tmpl_file="$f"
+            break
+        fi
+    done
+
+    [[ -z "$tmpl_file" ]] && error "Template not found: $template_id"
+
+    python3 - "$tmpl_file" "$INSTALL_DIR" <<'PYEOF'
+import yaml, sys
+from pathlib import Path
+
+with open(sys.argv[1]) as fh:
+    d = yaml.safe_load(fh)
+t = d.get("template", {})
+install_dir = Path(sys.argv[2])
+
+print(f"Template: {t.get('name', t.get('id', ''))}")
+print(f"Description: {t.get('description', '-')}")
+if t.get("estimated_disk_gb"):
+    print(f"Estimated disk: ~{t['estimated_disk_gb']}GB")
+print()
+
+services = t.get("services", [])
+ext_dir = install_dir / "extensions" / "services"
+user_ext_dir = install_dir / "data" / "user-extensions"
+
+to_enable = []
+already = []
+for svc in services:
+    cf = ext_dir / svc / "compose.yaml"
+    ucf = user_ext_dir / svc / "compose.yaml"
+    if cf.exists() or ucf.exists():
+        already.append(svc)
+    else:
+        to_enable.append(svc)
+
+if already:
+    print(f"Already enabled: {', '.join(already)}")
+if to_enable:
+    print(f"Will enable:     {', '.join(to_enable)}")
+if not to_enable:
+    print("Nothing to change — all services already enabled.")
+PYEOF
+}
+
+_template_apply() {
+    local template_id="${1:-}"
+    [[ -z "$template_id" ]] && { log "Usage: dream template apply <template-id>"; exit 1; }
+
+    local templates_dir="$INSTALL_DIR/templates"
+    local services
+    services=$(python3 - "$templates_dir" "$template_id" <<'PYEOF'
+import yaml, sys
+from pathlib import Path
+
+templates_dir = Path(sys.argv[1])
+target_id = sys.argv[2]
+
+for f in sorted(templates_dir.glob("*.yaml")) + sorted(templates_dir.glob("*.yml")):
+    with open(f) as fh:
+        d = yaml.safe_load(fh)
+    if not isinstance(d, dict) or d.get("schema_version") != "dream.templates.v1":
+        continue
+    t = d.get("template", {})
+    if t.get("id") == target_id:
+        print(" ".join(t.get("services", [])))
+        sys.exit(0)
+
+print("", file=sys.stderr)
+sys.exit(1)
+PYEOF
+    ) || error "Template not found: $template_id"
+
+    [[ -z "$services" ]] && { warn "Template has no services."; return 0; }
+
+    log "Applying template: $template_id"
+    local svc
+    for svc in $services; do
+        # Skip core services (no compose toggle needed)
+        local cat="${SERVICE_CATEGORIES[$svc]:-optional}"
+        [[ "$cat" == "core" ]] && continue
+
+        local cf="$INSTALL_DIR/extensions/services/$svc/compose.yaml"
+        local ucf="$INSTALL_DIR/data/user-extensions/$svc/compose.yaml"
+        if [[ -f "$cf" || -f "$ucf" ]]; then
+            log "  $svc — already enabled"
+            continue
+        fi
+
+        log "  Enabling $svc..."
+        cmd_enable "$svc" || warn "  Failed to enable $svc (continuing)"
+    done
+    success "Template applied: $template_id"
+}
+
+cmd_template() {
+    check_install
+    sr_load
+    load_env 2>/dev/null || true
+    local subcmd="${1:-list}"
+    shift || true
+    case "$subcmd" in
+        list)    _template_list ;;
+        preview) _template_preview "$@" ;;
+        apply)   _template_apply "$@" ;;
+        *)       log "Usage: dream template [list|preview|apply] [template-id]"; exit 1 ;;
+    esac
+}
+
 cmd_help() {
     sr_load
     cat << EOF
@@ -2851,6 +3187,7 @@ ${CYAN}Commands:${NC}
   list                List all services and their status
   enable <service>    Enable an extension service
   disable <service>   Disable an extension service
+  purge <service>     Permanently delete service data
   preset <action>     Save/load/list/delete/export/import presets
   mode [local|cloud|hybrid]
                       Switch between local/cloud/hybrid modes
@@ -2872,6 +3209,7 @@ ${CYAN}Commands:${NC}
   benchmark           Run a quick performance test
   doctor [report]     Run diagnostics and write JSON report
   repair|fix          Run basic repairs (currently redirects to doctor)
+  template [action]   Apply pre-built service templates (list|preview|apply)
   audit [extensions]  Audit extension manifests and compose contracts
   agent [action]      Manage dream host agent (status|start|stop|restart|logs)
   help                Show this help
@@ -2946,6 +3284,11 @@ ${CYAN}Examples:${NC}
   dream restart stt               # Restart Whisper (via alias)
   dream chat "What is 2+2?"      # Quick LLM test
   dream config edit               # Edit .env file
+  dream template list              # List available templates
+  dream template preview creative-studio
+                                  # Preview what a template will change
+  dream template apply chat-playground
+                                  # Apply a template (enables services)
   dream audit                     # Audit every extension contract
   dream audit --json whisper      # Audit one service as JSON
   dream agent status              # Check host agent health
@@ -2967,6 +3310,7 @@ case "${1:-help}" in
     list|ls)     cmd_list ;;
     enable)      shift; cmd_enable "$@" ;;
     disable)     shift; cmd_disable "$@" ;;
+    purge)       shift; cmd_purge "$@" ;;
     preset|p)    shift; cmd_preset "$@" ;;
     mode|m)      shift; cmd_mode "$@" ;;
     model)       shift; cmd_model "$@" ;;
@@ -2985,6 +3329,7 @@ case "${1:-help}" in
     benchmark|bench|b) cmd_benchmark ;;
     doctor|diag|d) shift; cmd_doctor "$@" ;;
     audit)        shift; cmd_audit "$@" ;;
+    template|tmpl) shift; cmd_template "$@" ;;
     agent)        shift; cmd_agent "$@" ;;
     help|h|--help|-h) cmd_help ;;
     version|v|--version|-v) echo "dream-cli v${VERSION}" ;;

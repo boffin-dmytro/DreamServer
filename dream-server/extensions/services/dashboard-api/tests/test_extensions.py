@@ -1,5 +1,7 @@
 """Tests for extensions portal endpoints."""
 
+import contextlib
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -274,7 +276,7 @@ class TestUserExtensionStatus:
         assert ext["status"] == "enabled"
 
     def test_user_ext_compose_yaml_no_service(self, test_client, monkeypatch, tmp_path):
-        """User extension with compose.yaml but no running container → enabled (file-based status)."""
+        """User extension with compose.yaml but no running container → stopped."""
         user_dir = tmp_path / "user"
         ext_dir = user_dir / "my-ext"
         ext_dir.mkdir(parents=True)
@@ -284,18 +286,20 @@ class TestUserExtensionStatus:
         _patch_extensions_config(monkeypatch, catalog, tmp_path=tmp_path)
         monkeypatch.setattr("routers.extensions.USER_EXTENSIONS_DIR", user_dir)
 
-        # No service in health results — svc is None
-        with patch("helpers.get_all_services", new_callable=AsyncMock,
-                   return_value=[]):
-            resp = test_client.get(
-                "/api/extensions/catalog",
-                headers=test_client.auth_headers,
-            )
+        # No service in health results — svc is None → stopped
+        with patch("user_extensions.get_user_services_cached",
+                   return_value={}):
+            with patch("helpers.get_all_services", new_callable=AsyncMock,
+                       return_value=[]):
+                resp = test_client.get(
+                    "/api/extensions/catalog",
+                    headers=test_client.auth_headers,
+                )
 
         assert resp.status_code == 200
         ext = resp.json()["extensions"][0]
         assert ext["id"] == "my-ext"
-        assert ext["status"] == "enabled"
+        assert ext["status"] == "stopped"
 
     def test_user_ext_compose_yaml_disabled(self, test_client, monkeypatch, tmp_path):
         """User extension with compose.yaml.disabled → disabled."""
@@ -526,8 +530,8 @@ class TestEnableExtension:
         assert (user_dir / "my-ext" / "compose.yaml").exists()
         assert not (user_dir / "my-ext" / "compose.yaml.disabled").exists()
 
-    def test_enable_already_enabled_409(self, test_client, monkeypatch, tmp_path):
-        """409 when extension is already enabled."""
+    def test_enable_stopped_starts_without_rename(self, test_client, monkeypatch, tmp_path):
+        """Enable when compose.yaml exists (stopped) → starts without rename."""
         user_dir = _setup_user_ext(tmp_path, "my-ext", enabled=True)
         _patch_mutation_config(monkeypatch, tmp_path, user_dir=user_dir)
 
@@ -535,7 +539,11 @@ class TestEnableExtension:
             "/api/extensions/my-ext/enable",
             headers=test_client.auth_headers,
         )
-        assert resp.status_code == 409
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["action"] == "enabled"
+        # compose.yaml still exists (no rename happened)
+        assert (user_dir / "my-ext" / "compose.yaml").exists()
 
     def test_enable_allows_core_service_dependency(self, test_client, monkeypatch, tmp_path):
         """Enable succeeds when depends_on includes a core service."""
@@ -564,7 +572,9 @@ class TestEnableExtension:
             headers=test_client.auth_headers,
         )
         assert resp.status_code == 400
-        assert "missing-dep" in resp.json()["detail"]
+        detail = resp.json()["detail"]
+        assert "missing-dep" in detail["missing_dependencies"]
+        assert detail["auto_enable_available"] is True
 
     def test_enable_core_service_403(self, test_client, monkeypatch, tmp_path):
         """403 when trying to enable a core service."""
@@ -622,6 +632,22 @@ class TestDisableExtension:
         assert (user_dir / "my-ext" / "compose.yaml.disabled").exists()
         assert not (user_dir / "my-ext" / "compose.yaml").exists()
 
+    def test_disable_unlinks_progress_file(self, test_client, monkeypatch, tmp_path):
+        """Disable removes the stale progress file so status reflects reality."""
+        user_dir = _setup_user_ext(tmp_path, "my-ext", enabled=True)
+        _patch_mutation_config(monkeypatch, tmp_path, user_dir=user_dir)
+        progress_file = tmp_path / "extension-progress" / "my-ext.json"
+        progress_file.parent.mkdir(parents=True, exist_ok=True)
+        progress_file.write_text('{"status": "started", "updated_at": "2026-04-10T00:00:00"}')
+
+        resp = test_client.post(
+            "/api/extensions/my-ext/disable",
+            headers=test_client.auth_headers,
+        )
+
+        assert resp.status_code == 200
+        assert not progress_file.exists()
+
     def test_disable_already_disabled_409(self, test_client, monkeypatch, tmp_path):
         """409 when extension is already disabled."""
         user_dir = _setup_user_ext(tmp_path, "my-ext", enabled=False)
@@ -674,6 +700,18 @@ class TestDisableExtension:
         resp = test_client.post("/api/extensions/my-ext/disable")
         assert resp.status_code == 401
 
+    def test_disable_skips_data_info(self, test_client, monkeypatch, tmp_path):
+        """include_data_info=false → data_info is None (skips expensive dir scan)."""
+        user_dir = _setup_user_ext(tmp_path, "my-ext", enabled=True)
+        _patch_mutation_config(monkeypatch, tmp_path, user_dir=user_dir)
+
+        resp = test_client.post(
+            "/api/extensions/my-ext/disable?include_data_info=false",
+            headers=test_client.auth_headers,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["data_info"] is None
+
 
 # --- Uninstall endpoint ---
 
@@ -694,6 +732,22 @@ class TestUninstallExtension:
         data = resp.json()
         assert data["action"] == "uninstalled"
         assert not (user_dir / "my-ext").exists()
+
+    def test_uninstall_unlinks_progress_file(self, test_client, monkeypatch, tmp_path):
+        """Uninstall removes the stale progress file so status reflects reality."""
+        user_dir = _setup_user_ext(tmp_path, "my-ext", enabled=False)
+        _patch_mutation_config(monkeypatch, tmp_path, user_dir=user_dir)
+        progress_file = tmp_path / "extension-progress" / "my-ext.json"
+        progress_file.parent.mkdir(parents=True, exist_ok=True)
+        progress_file.write_text('{"status": "started", "updated_at": "2026-04-10T00:00:00"}')
+
+        resp = test_client.delete(
+            "/api/extensions/my-ext",
+            headers=test_client.auth_headers,
+        )
+
+        assert resp.status_code == 200
+        assert not progress_file.exists()
 
     def test_uninstall_rejects_enabled_400(self, test_client, monkeypatch, tmp_path):
         """400 when extension is still enabled."""
@@ -723,6 +777,69 @@ class TestUninstallExtension:
         assert resp.status_code == 401
 
 
+# --- Compose-flags cache invalidation ---
+
+
+class TestComposeCacheInvalidation:
+    """Every successful compose mutation must invalidate the host .compose-flags cache."""
+
+    def _spy(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(
+            "routers.extensions._call_agent_invalidate_compose_cache",
+            lambda: calls.append(1),
+        )
+        return calls
+
+    def test_install_invalidates_cache(self, test_client, monkeypatch, tmp_path):
+        lib_dir = _setup_library_ext(tmp_path, "my-ext")
+        _patch_mutation_config(monkeypatch, tmp_path, lib_dir=lib_dir)
+        calls = self._spy(monkeypatch)
+
+        resp = test_client.post(
+            "/api/extensions/my-ext/install",
+            headers=test_client.auth_headers,
+        )
+        assert resp.status_code == 200
+        assert len(calls) == 1
+
+    def test_enable_invalidates_cache(self, test_client, monkeypatch, tmp_path):
+        user_dir = _setup_user_ext(tmp_path, "my-ext", enabled=False)
+        _patch_mutation_config(monkeypatch, tmp_path, user_dir=user_dir)
+        calls = self._spy(monkeypatch)
+
+        resp = test_client.post(
+            "/api/extensions/my-ext/enable",
+            headers=test_client.auth_headers,
+        )
+        assert resp.status_code == 200
+        assert len(calls) == 1
+
+    def test_disable_invalidates_cache(self, test_client, monkeypatch, tmp_path):
+        user_dir = _setup_user_ext(tmp_path, "my-ext", enabled=True)
+        _patch_mutation_config(monkeypatch, tmp_path, user_dir=user_dir)
+        calls = self._spy(monkeypatch)
+
+        resp = test_client.post(
+            "/api/extensions/my-ext/disable",
+            headers=test_client.auth_headers,
+        )
+        assert resp.status_code == 200
+        assert len(calls) == 1
+
+    def test_uninstall_invalidates_cache(self, test_client, monkeypatch, tmp_path):
+        user_dir = _setup_user_ext(tmp_path, "my-ext", enabled=False)
+        _patch_mutation_config(monkeypatch, tmp_path, user_dir=user_dir)
+        calls = self._spy(monkeypatch)
+
+        resp = test_client.delete(
+            "/api/extensions/my-ext",
+            headers=test_client.auth_headers,
+        )
+        assert resp.status_code == 200
+        assert len(calls) == 1
+
+
 # --- Path traversal on mutation endpoints ---
 
 
@@ -738,6 +855,7 @@ class TestMutationPathTraversal:
             ("POST", "/api/extensions/{}/enable"),
             ("POST", "/api/extensions/{}/disable"),
             ("DELETE", "/api/extensions/{}"),
+            ("DELETE", "/api/extensions/{}/data"),
         ]
 
         for bad_id in bad_ids:
@@ -746,6 +864,12 @@ class TestMutationPathTraversal:
                 if method == "POST":
                     resp = test_client.post(
                         url, headers=test_client.auth_headers,
+                    )
+                elif "/data" in pattern:
+                    # Purge endpoint requires a JSON body (PurgeRequest)
+                    resp = test_client.request(
+                        "DELETE", url, headers=test_client.auth_headers,
+                        json={"confirm": False},
                     )
                 else:
                     resp = test_client.delete(
@@ -1086,6 +1210,181 @@ class TestInstallSizeQuota:
         assert "50MB" in resp.json()["detail"]
 
 
+# --- Extension lifecycle status (stopped / health-based) ---
+
+
+class TestExtensionLifecycleStatus:
+
+    def test_user_extension_enabled_and_healthy(self, test_client, monkeypatch, tmp_path):
+        """User extension with compose.yaml + healthy container → enabled."""
+        user_dir = tmp_path / "user"
+        ext_dir = user_dir / "my-ext"
+        ext_dir.mkdir(parents=True)
+        (ext_dir / "compose.yaml").write_text(_SAFE_COMPOSE)
+        (ext_dir / "manifest.yaml").write_text(yaml.dump({
+            "schema_version": "dream.services.v1",
+            "service": {"id": "my-ext", "name": "My Ext", "port": 8080,
+                         "health": "/health"},
+        }))
+
+        catalog = [_make_catalog_ext("my-ext", "My Extension")]
+        _patch_extensions_config(monkeypatch, catalog, tmp_path=tmp_path)
+        monkeypatch.setattr("routers.extensions.USER_EXTENSIONS_DIR", user_dir)
+
+        mock_svc = _make_service_status("my-ext", "healthy")
+        with patch("user_extensions.get_user_services_cached",
+                   return_value={"my-ext": {"host": "my-ext", "port": 8080,
+                                             "health": "/health", "name": "My Ext"}}):
+            with patch("helpers.get_all_services", new_callable=AsyncMock,
+                       return_value=[]):
+                with patch("helpers.check_service_health", new_callable=AsyncMock,
+                           return_value=mock_svc):
+                    resp = test_client.get(
+                        "/api/extensions/catalog",
+                        headers=test_client.auth_headers,
+                    )
+
+        assert resp.status_code == 200
+        ext = resp.json()["extensions"][0]
+        assert ext["status"] == "enabled"
+
+    def test_user_extension_enabled_but_unhealthy(self, test_client, monkeypatch, tmp_path):
+        """User extension with compose.yaml + unhealthy container → stopped."""
+        user_dir = tmp_path / "user"
+        ext_dir = user_dir / "my-ext"
+        ext_dir.mkdir(parents=True)
+        (ext_dir / "compose.yaml").write_text(_SAFE_COMPOSE)
+        (ext_dir / "manifest.yaml").write_text(yaml.dump({
+            "schema_version": "dream.services.v1",
+            "service": {"id": "my-ext", "name": "My Ext", "port": 8080,
+                         "health": "/health"},
+        }))
+
+        catalog = [_make_catalog_ext("my-ext", "My Extension")]
+        _patch_extensions_config(monkeypatch, catalog, tmp_path=tmp_path)
+        monkeypatch.setattr("routers.extensions.USER_EXTENSIONS_DIR", user_dir)
+
+        mock_svc = _make_service_status("my-ext", "down")
+        with patch("user_extensions.get_user_services_cached",
+                   return_value={"my-ext": {"host": "my-ext", "port": 8080,
+                                             "health": "/health", "name": "My Ext"}}):
+            with patch("helpers.get_all_services", new_callable=AsyncMock,
+                       return_value=[]):
+                with patch("helpers.check_service_health", new_callable=AsyncMock,
+                           return_value=mock_svc):
+                    resp = test_client.get(
+                        "/api/extensions/catalog",
+                        headers=test_client.auth_headers,
+                    )
+
+        assert resp.status_code == 200
+        ext = resp.json()["extensions"][0]
+        assert ext["status"] == "stopped"
+
+    def test_user_extension_disabled_unchanged(self, test_client, monkeypatch, tmp_path):
+        """User extension with compose.yaml.disabled → disabled (unchanged)."""
+        user_dir = tmp_path / "user"
+        ext_dir = user_dir / "my-ext"
+        ext_dir.mkdir(parents=True)
+        (ext_dir / "compose.yaml.disabled").write_text(_SAFE_COMPOSE)
+
+        catalog = [_make_catalog_ext("my-ext", "My Extension")]
+        _patch_extensions_config(monkeypatch, catalog, tmp_path=tmp_path)
+        monkeypatch.setattr("routers.extensions.USER_EXTENSIONS_DIR", user_dir)
+
+        with patch("user_extensions.get_user_services_cached",
+                   return_value={}):
+            with patch("helpers.get_all_services", new_callable=AsyncMock,
+                       return_value=[]):
+                resp = test_client.get(
+                    "/api/extensions/catalog",
+                    headers=test_client.auth_headers,
+                )
+
+        assert resp.status_code == 200
+        ext = resp.json()["extensions"][0]
+        assert ext["status"] == "disabled"
+
+    def test_core_service_status_unchanged(self, test_client, monkeypatch, tmp_path):
+        """Core service healthy → enabled, unhealthy → disabled (unchanged)."""
+        catalog = [_make_catalog_ext("core-svc", "Core Service")]
+        services = {"core-svc": {"host": "localhost", "port": 8080, "name": "Core"}}
+        _patch_extensions_config(monkeypatch, catalog, services, tmp_path=tmp_path)
+
+        mock_svc = _make_service_status("core-svc", "healthy")
+        with patch("user_extensions.get_user_services_cached",
+                   return_value={}):
+            with patch("helpers.get_all_services", new_callable=AsyncMock,
+                       return_value=[mock_svc]):
+                resp = test_client.get(
+                    "/api/extensions/catalog",
+                    headers=test_client.auth_headers,
+                )
+
+        assert resp.status_code == 200
+        ext = resp.json()["extensions"][0]
+        assert ext["status"] == "enabled"
+
+    def test_catalog_includes_user_extension_health(self, test_client, monkeypatch, tmp_path):
+        """Catalog response includes 'stopped' in summary counts."""
+        user_dir = tmp_path / "user"
+        ext_dir = user_dir / "my-ext"
+        ext_dir.mkdir(parents=True)
+        (ext_dir / "compose.yaml").write_text(_SAFE_COMPOSE)
+
+        catalog = [_make_catalog_ext("my-ext", "My Extension")]
+        _patch_extensions_config(monkeypatch, catalog, tmp_path=tmp_path)
+        monkeypatch.setattr("routers.extensions.USER_EXTENSIONS_DIR", user_dir)
+
+        # No health data → stopped
+        with patch("user_extensions.get_user_services_cached",
+                   return_value={}):
+            with patch("helpers.get_all_services", new_callable=AsyncMock,
+                       return_value=[]):
+                resp = test_client.get(
+                    "/api/extensions/catalog",
+                    headers=test_client.auth_headers,
+                )
+
+        assert resp.status_code == 200
+        summary = resp.json()["summary"]
+        assert summary["stopped"] == 1
+        assert summary["installed"] == 1
+
+    def test_enable_stopped_extension(self, test_client, monkeypatch, tmp_path):
+        """Enable when compose.yaml exists (stopped) → starts without rename."""
+        user_dir = _setup_user_ext(tmp_path, "my-ext", enabled=True)
+        _patch_mutation_config(monkeypatch, tmp_path, user_dir=user_dir)
+
+        resp = test_client.post(
+            "/api/extensions/my-ext/enable",
+            headers=test_client.auth_headers,
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["action"] == "enabled"
+        # compose.yaml should still exist (not renamed)
+        assert (user_dir / "my-ext" / "compose.yaml").exists()
+
+    def test_enable_stopped_rejects_malicious_compose(self, test_client, monkeypatch, tmp_path):
+        """Enable stopped ext with malicious compose.yaml → 400."""
+        bad_compose = "services:\n  svc:\n    image: test\n    privileged: true\n"
+        user_dir = tmp_path / "user"
+        user_dir.mkdir(exist_ok=True)
+        ext_dir = user_dir / "bad-ext"
+        ext_dir.mkdir(exist_ok=True)
+        (ext_dir / "compose.yaml").write_text(bad_compose)
+        _patch_mutation_config(monkeypatch, tmp_path, user_dir=user_dir)
+
+        resp = test_client.post(
+            "/api/extensions/bad-ext/enable",
+            headers=test_client.auth_headers,
+        )
+        assert resp.status_code == 400
+        assert "privileged" in resp.json()["detail"]
+
+
 # --- Symlink handling ---
 
 
@@ -1106,6 +1405,26 @@ class TestSymlinkHandling:
         assert (dst / "real.txt").exists()
         assert not (dst / "link.txt").exists()
 
+    def test_enable_stopped_rejects_symlinked_compose(
+        self, test_client, monkeypatch, tmp_path,
+    ):
+        """Enable stopped ext rejects a compose.yaml that is a symlink."""
+        user_dir = tmp_path / "user"
+        ext_dir = user_dir / "my-ext"
+        ext_dir.mkdir(parents=True)
+        # Create a real file and symlink compose.yaml to it
+        real_compose = tmp_path / "real-compose.yaml"
+        real_compose.write_text(_SAFE_COMPOSE)
+        (ext_dir / "compose.yaml").symlink_to(real_compose)
+        _patch_mutation_config(monkeypatch, tmp_path, user_dir=user_dir)
+
+        resp = test_client.post(
+            "/api/extensions/my-ext/enable",
+            headers=test_client.auth_headers,
+        )
+        assert resp.status_code == 400
+        assert "symlink" in resp.json()["detail"]
+
     def test_enable_rejects_symlinked_compose(
         self, test_client, monkeypatch, tmp_path,
     ):
@@ -1125,3 +1444,534 @@ class TestSymlinkHandling:
         )
         assert resp.status_code == 400
         assert "symlink" in resp.json()["detail"]
+
+
+# --- Purge extension data ---
+
+
+class TestPurgeExtensionData:
+
+    def test_purge_happy_path(self, test_client, monkeypatch, tmp_path):
+        """Purge succeeds for disabled extension with existing data dir."""
+        _patch_mutation_config(monkeypatch, tmp_path)
+        data_dir = tmp_path / "my-ext"
+        data_dir.mkdir()
+        (data_dir / "some-file.db").write_text("data")
+
+        with patch("routers.extensions._extensions_lock", return_value=contextlib.nullcontext()), \
+             patch("helpers.dir_size_gb", return_value=1.5):
+            resp = test_client.request(
+                "DELETE", "/api/extensions/my-ext/data",
+                headers=test_client.auth_headers,
+                json={"confirm": True},
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["id"] == "my-ext"
+        assert data["action"] == "purged"
+        assert data["size_gb_freed"] == 1.5
+        assert not data_dir.exists()
+
+    def test_purge_unlinks_progress_file(self, test_client, monkeypatch, tmp_path):
+        """Purge also deletes the per-service install-progress entry so the UI
+        does not keep showing a stale 'installing' status."""
+        _patch_mutation_config(monkeypatch, tmp_path)
+        data_dir = tmp_path / "my-ext"
+        data_dir.mkdir()
+        (data_dir / "some-file.db").write_text("data")
+        progress_dir = tmp_path / "extension-progress"
+        progress_dir.mkdir()
+        progress_file = progress_dir / "my-ext.json"
+        progress_file.write_text(
+            '{"service_id": "my-ext", "status": "started",'
+            ' "phase_label": "stale", "error": null,'
+            ' "started_at": "2026-04-10T00:00:00+00:00",'
+            ' "updated_at": "2026-04-10T00:00:00+00:00"}'
+        )
+
+        with patch("routers.extensions._extensions_lock", return_value=contextlib.nullcontext()), \
+             patch("helpers.dir_size_gb", return_value=0.1):
+            resp = test_client.request(
+                "DELETE", "/api/extensions/my-ext/data",
+                headers=test_client.auth_headers,
+                json={"confirm": True},
+            )
+
+        assert resp.status_code == 200
+        assert not progress_file.exists(), "purge must unlink the progress file"
+
+    def test_purge_400_when_enabled_builtin(self, test_client, monkeypatch, tmp_path):
+        """400 when extension is still enabled (compose.yaml in built-in dir)."""
+        _patch_mutation_config(monkeypatch, tmp_path)
+        # Create compose.yaml in the built-in extensions dir
+        builtin_dir = tmp_path / "builtin" / "my-ext"
+        builtin_dir.mkdir(parents=True)
+        (builtin_dir / "compose.yaml").write_text("version: '3'")
+        # Also need a data dir to get past later checks
+        data_dir = tmp_path / "my-ext"
+        data_dir.mkdir()
+
+        with patch("routers.extensions._extensions_lock", return_value=contextlib.nullcontext()):
+            resp = test_client.request(
+                "DELETE", "/api/extensions/my-ext/data",
+                headers=test_client.auth_headers,
+                json={"confirm": True},
+            )
+
+        assert resp.status_code == 400
+        assert "still enabled" in resp.json()["detail"]
+
+    def test_purge_400_when_enabled_user(self, test_client, monkeypatch, tmp_path):
+        """400 when extension is still enabled (compose.yaml in user dir)."""
+        user_dir = _setup_user_ext(tmp_path, "my-ext", enabled=True)
+        _patch_mutation_config(monkeypatch, tmp_path, user_dir=user_dir)
+
+        with patch("routers.extensions._extensions_lock", return_value=contextlib.nullcontext()):
+            resp = test_client.request(
+                "DELETE", "/api/extensions/my-ext/data",
+                headers=test_client.auth_headers,
+                json={"confirm": True},
+            )
+
+        assert resp.status_code == 400
+        assert "still enabled" in resp.json()["detail"]
+
+    def test_purge_403_core_service(self, test_client, monkeypatch, tmp_path):
+        """403 when trying to purge a core service."""
+        _patch_mutation_config(monkeypatch, tmp_path)
+
+        resp = test_client.request(
+            "DELETE", "/api/extensions/open-webui/data",
+            headers=test_client.auth_headers,
+            json={"confirm": True},
+        )
+
+        assert resp.status_code == 403
+        assert "core service" in resp.json()["detail"].lower()
+
+    def test_purge_404_invalid_id(self, test_client, monkeypatch, tmp_path):
+        """404 for service_id that fails regex validation."""
+        _patch_mutation_config(monkeypatch, tmp_path)
+
+        for bad_id in ["..etc", ".hidden", "UPPERCASE", "-starts-dash"]:
+            resp = test_client.request(
+                "DELETE", f"/api/extensions/{bad_id}/data",
+                headers=test_client.auth_headers,
+                json={"confirm": True},
+            )
+            assert resp.status_code == 404, f"Expected 404 for: {bad_id}"
+
+    def test_purge_404_no_data_dir(self, test_client, monkeypatch, tmp_path):
+        """404 when valid ID but no data directory exists."""
+        _patch_mutation_config(monkeypatch, tmp_path)
+
+        with patch("routers.extensions._extensions_lock", return_value=contextlib.nullcontext()):
+            resp = test_client.request(
+                "DELETE", "/api/extensions/my-ext/data",
+                headers=test_client.auth_headers,
+                json={"confirm": True},
+            )
+
+        assert resp.status_code == 404
+        assert "No data directory" in resp.json()["detail"]
+
+    def test_purge_400_confirm_false(self, test_client, monkeypatch, tmp_path):
+        """400 when data exists but confirm is false."""
+        _patch_mutation_config(monkeypatch, tmp_path)
+        data_dir = tmp_path / "my-ext"
+        data_dir.mkdir()
+
+        with patch("routers.extensions._extensions_lock", return_value=contextlib.nullcontext()):
+            resp = test_client.request(
+                "DELETE", "/api/extensions/my-ext/data",
+                headers=test_client.auth_headers,
+                json={"confirm": False},
+            )
+
+        assert resp.status_code == 400
+        assert "Confirmation required" in resp.json()["detail"]
+        # Data dir should still exist
+        assert data_dir.exists()
+
+    def test_purge_path_traversal(self, test_client, monkeypatch, tmp_path):
+        """Path traversal attempts are blocked by regex or path check."""
+        _patch_mutation_config(monkeypatch, tmp_path)
+
+        resp = test_client.request(
+            "DELETE", "/api/extensions/..%2fetc/data",
+            headers=test_client.auth_headers,
+            json={"confirm": True},
+        )
+        # Should fail at regex or Starlette routing level
+        assert resp.status_code in (404, 422)
+
+    def test_purge_requires_auth(self, test_client):
+        """DELETE /api/extensions/{id}/data without auth → 401."""
+        resp = test_client.request(
+            "DELETE", "/api/extensions/my-ext/data",
+            json={"confirm": True},
+        )
+        assert resp.status_code == 401
+
+
+# --- Orphaned storage ---
+
+
+class TestOrphanedStorage:
+
+    def test_orphaned_requires_auth(self, test_client):
+        """GET /api/storage/orphaned without auth → 401."""
+        resp = test_client.get("/api/storage/orphaned")
+        assert resp.status_code == 401
+
+    def test_orphaned_empty_data_dir(self, test_client, monkeypatch, tmp_path):
+        """Empty data dir returns empty orphaned list."""
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        monkeypatch.setattr("routers.extensions.DATA_DIR", str(data_dir))
+        monkeypatch.setattr("routers.extensions.SERVICES", {})
+
+        resp = test_client.get(
+            "/api/storage/orphaned",
+            headers=test_client.auth_headers,
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["orphaned"] == []
+        assert data["total_gb"] == 0
+
+    def test_orphaned_nonexistent_data_dir(self, test_client, monkeypatch, tmp_path):
+        """Non-existent data dir returns empty orphaned list."""
+        monkeypatch.setattr("routers.extensions.DATA_DIR",
+                            str(tmp_path / "nonexistent"))
+        monkeypatch.setattr("routers.extensions.SERVICES", {})
+
+        resp = test_client.get(
+            "/api/storage/orphaned",
+            headers=test_client.auth_headers,
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["orphaned"] == []
+        assert data["total_gb"] == 0
+
+    def test_orphaned_excludes_known_services(self, test_client, monkeypatch, tmp_path):
+        """Dirs matching SERVICES keys are not listed as orphaned."""
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        (data_dir / "known-svc").mkdir()
+        monkeypatch.setattr("routers.extensions.DATA_DIR", str(data_dir))
+        monkeypatch.setattr("routers.extensions.SERVICES",
+                            {"known-svc": {"host": "localhost", "port": 8080}})
+
+        with patch("helpers.dir_size_gb", return_value=2.0):
+            resp = test_client.get(
+                "/api/storage/orphaned",
+                headers=test_client.auth_headers,
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["orphaned"] == []
+        assert data["total_gb"] == 0
+
+    def test_orphaned_excludes_system_dirs(self, test_client, monkeypatch, tmp_path):
+        """System dirs (models, config, etc.) are not listed as orphaned."""
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        for name in ("models", "config", "user-extensions", "extensions-library"):
+            (data_dir / name).mkdir()
+        monkeypatch.setattr("routers.extensions.DATA_DIR", str(data_dir))
+        monkeypatch.setattr("routers.extensions.SERVICES", {})
+
+        with patch("helpers.dir_size_gb", return_value=1.0):
+            resp = test_client.get(
+                "/api/storage/orphaned",
+                headers=test_client.auth_headers,
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["orphaned"] == []
+        assert data["total_gb"] == 0
+
+    def test_orphaned_includes_unknown_dirs(self, test_client, monkeypatch, tmp_path):
+        """Dirs not in SERVICES or system_dirs are listed as orphaned."""
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        (data_dir / "mystery-data").mkdir()
+        (data_dir / "leftover-ext").mkdir()
+        monkeypatch.setattr("routers.extensions.DATA_DIR", str(data_dir))
+        monkeypatch.setattr("routers.extensions.SERVICES", {})
+
+        with patch("helpers.dir_size_gb", return_value=3.0):
+            resp = test_client.get(
+                "/api/storage/orphaned",
+                headers=test_client.auth_headers,
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["orphaned"]) == 2
+        names = [o["name"] for o in data["orphaned"]]
+        assert "mystery-data" in names
+        assert "leftover-ext" in names
+        assert data["orphaned"][0]["size_gb"] == 3.0
+        assert data["total_gb"] == 6.0
+
+    def test_orphaned_skips_files(self, test_client, monkeypatch, tmp_path):
+        """Regular files in data dir are not listed."""
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        (data_dir / "some-file.txt").write_text("not a directory")
+        (data_dir / "orphan-dir").mkdir()
+        monkeypatch.setattr("routers.extensions.DATA_DIR", str(data_dir))
+        monkeypatch.setattr("routers.extensions.SERVICES", {})
+
+        with patch("helpers.dir_size_gb", return_value=0.5):
+            resp = test_client.get(
+                "/api/storage/orphaned",
+                headers=test_client.auth_headers,
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["orphaned"]) == 1
+        assert data["orphaned"][0]["name"] == "orphan-dir"
+        assert data["total_gb"] == 0.5
+
+# --- Install progress tracking ---
+
+
+class TestInstallProgress:
+
+    def test_progress_endpoint_no_progress(self, test_client, monkeypatch, tmp_path):
+        """GET progress when no file exists → idle."""
+        _patch_mutation_config(monkeypatch, tmp_path)
+
+        resp = test_client.get(
+            "/api/extensions/my-ext/progress",
+            headers=test_client.auth_headers,
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["service_id"] == "my-ext"
+        assert data["status"] == "idle"
+
+    def test_progress_endpoint_during_install(self, test_client, monkeypatch, tmp_path):
+        """GET progress with active progress file → returns data."""
+        _patch_mutation_config(monkeypatch, tmp_path)
+
+        progress_dir = tmp_path / "extension-progress"
+        progress_dir.mkdir()
+        progress_data = {
+            "service_id": "my-ext",
+            "status": "pulling",
+            "phase_label": "Downloading image...",
+            "error": None,
+            "started_at": "2026-04-06T10:00:00+00:00",
+            "updated_at": "2026-04-06T10:00:05+00:00",
+        }
+        (progress_dir / "my-ext.json").write_text(json.dumps(progress_data))
+
+        resp = test_client.get(
+            "/api/extensions/my-ext/progress",
+            headers=test_client.auth_headers,
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "pulling"
+        assert data["phase_label"] == "Downloading image..."
+
+    def test_status_installing_when_progress_pulling(self, monkeypatch, tmp_path):
+        """Progress file with status 'pulling' → _compute_extension_status returns 'installing'."""
+        from routers.extensions import _compute_extension_status
+
+        monkeypatch.setattr("routers.extensions.DATA_DIR", str(tmp_path))
+        monkeypatch.setattr("routers.extensions.USER_EXTENSIONS_DIR", tmp_path / "user")
+        monkeypatch.setattr("routers.extensions.GPU_BACKEND", "nvidia")
+        monkeypatch.setattr("routers.extensions.SERVICES", {})
+
+        progress_dir = tmp_path / "extension-progress"
+        progress_dir.mkdir()
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        progress_data = {
+            "service_id": "my-ext",
+            "status": "pulling",
+            "phase_label": "Downloading image...",
+            "error": None,
+            "started_at": now,
+            "updated_at": now,
+        }
+        (progress_dir / "my-ext.json").write_text(json.dumps(progress_data))
+
+        ext = _make_catalog_ext("my-ext")
+        status = _compute_extension_status(ext, {})
+        assert status == "installing"
+
+    def test_status_installing_when_progress_starting(self, monkeypatch, tmp_path):
+        """Progress file with status 'starting' → _compute_extension_status returns 'installing'."""
+        from routers.extensions import _compute_extension_status
+
+        monkeypatch.setattr("routers.extensions.DATA_DIR", str(tmp_path))
+        monkeypatch.setattr("routers.extensions.USER_EXTENSIONS_DIR", tmp_path / "user")
+        monkeypatch.setattr("routers.extensions.GPU_BACKEND", "nvidia")
+        monkeypatch.setattr("routers.extensions.SERVICES", {})
+
+        progress_dir = tmp_path / "extension-progress"
+        progress_dir.mkdir()
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        progress_data = {
+            "service_id": "my-ext",
+            "status": "starting",
+            "phase_label": "Starting container...",
+            "error": None,
+            "started_at": now,
+            "updated_at": now,
+        }
+        (progress_dir / "my-ext.json").write_text(json.dumps(progress_data))
+
+        ext = _make_catalog_ext("my-ext")
+        status = _compute_extension_status(ext, {})
+        assert status == "installing"
+
+    def test_status_setting_up_when_progress_setup_hook(self, monkeypatch, tmp_path):
+        """Progress file with status 'setup_hook' → returns 'setting_up'."""
+        from routers.extensions import _compute_extension_status
+
+        monkeypatch.setattr("routers.extensions.DATA_DIR", str(tmp_path))
+        monkeypatch.setattr("routers.extensions.USER_EXTENSIONS_DIR", tmp_path / "user")
+        monkeypatch.setattr("routers.extensions.GPU_BACKEND", "nvidia")
+        monkeypatch.setattr("routers.extensions.SERVICES", {})
+
+        progress_dir = tmp_path / "extension-progress"
+        progress_dir.mkdir()
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        progress_data = {
+            "service_id": "my-ext",
+            "status": "setup_hook",
+            "phase_label": "Running setup...",
+            "error": None,
+            "started_at": now,
+            "updated_at": now,
+        }
+        (progress_dir / "my-ext.json").write_text(json.dumps(progress_data))
+
+        ext = _make_catalog_ext("my-ext")
+        status = _compute_extension_status(ext, {})
+        assert status == "setting_up"
+
+    def test_status_error_when_progress_error(self, monkeypatch, tmp_path):
+        """Progress file with status 'error' → returns 'error'."""
+        from routers.extensions import _compute_extension_status
+
+        monkeypatch.setattr("routers.extensions.DATA_DIR", str(tmp_path))
+        monkeypatch.setattr("routers.extensions.USER_EXTENSIONS_DIR", tmp_path / "user")
+        monkeypatch.setattr("routers.extensions.GPU_BACKEND", "nvidia")
+        monkeypatch.setattr("routers.extensions.SERVICES", {})
+
+        progress_dir = tmp_path / "extension-progress"
+        progress_dir.mkdir()
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        progress_data = {
+            "service_id": "my-ext",
+            "status": "error",
+            "phase_label": "Installation failed",
+            "error": "something went wrong",
+            "started_at": now,
+            "updated_at": now,
+        }
+        (progress_dir / "my-ext.json").write_text(json.dumps(progress_data))
+
+        ext = _make_catalog_ext("my-ext")
+        status = _compute_extension_status(ext, {})
+        assert status == "error"
+
+    def test_stale_progress_ignored(self, monkeypatch, tmp_path):
+        """Progress file >1 hour old → _read_progress returns None."""
+        from routers.extensions import _read_progress
+
+        monkeypatch.setattr("routers.extensions.DATA_DIR", str(tmp_path))
+
+        progress_dir = tmp_path / "extension-progress"
+        progress_dir.mkdir()
+        # Set updated_at to far in the past (well over 1 hour)
+        progress_data = {
+            "service_id": "my-ext",
+            "status": "pulling",
+            "phase_label": "Downloading image...",
+            "error": None,
+            "started_at": "2020-01-01T00:00:00+00:00",
+            "updated_at": "2020-01-01T00:00:00+00:00",
+        }
+        (progress_dir / "my-ext.json").write_text(json.dumps(progress_data))
+
+        result = _read_progress("my-ext")
+        assert result is None
+
+    def test_stale_error_progress_preserved(self, monkeypatch, tmp_path):
+        """Stale progress file with status 'error' → _read_progress still returns it (not None)."""
+        from routers.extensions import _read_progress
+
+        monkeypatch.setattr("routers.extensions.DATA_DIR", str(tmp_path))
+
+        progress_dir = tmp_path / "extension-progress"
+        progress_dir.mkdir()
+        progress_data = {
+            "service_id": "my-ext",
+            "status": "error",
+            "phase_label": "Installation failed",
+            "error": "something went wrong",
+            "started_at": "2020-01-01T00:00:00+00:00",
+            "updated_at": "2020-01-01T00:00:00+00:00",
+        }
+        (progress_dir / "my-ext.json").write_text(json.dumps(progress_data))
+
+        result = _read_progress("my-ext")
+        assert result is not None
+        assert result["status"] == "error"
+
+    def test_progress_cleanup_removes_old_started(self, monkeypatch, tmp_path):
+        """_cleanup_stale_progress() removes 'started' files >15 min old."""
+        from routers.extensions import _cleanup_stale_progress
+
+        monkeypatch.setattr("routers.extensions.DATA_DIR", str(tmp_path))
+
+        progress_dir = tmp_path / "extension-progress"
+        progress_dir.mkdir()
+        progress_data = {
+            "service_id": "my-ext",
+            "status": "started",
+            "phase_label": "Service started",
+            "error": None,
+            "started_at": "2020-01-01T00:00:00+00:00",
+            "updated_at": "2020-01-01T00:00:00+00:00",
+        }
+        (progress_dir / "my-ext.json").write_text(json.dumps(progress_data))
+
+        _cleanup_stale_progress()
+
+        assert not (progress_dir / "my-ext.json").exists()
+
+    def test_install_returns_progress_endpoint(self, test_client, monkeypatch, tmp_path):
+        """Install response includes progress_endpoint field."""
+        lib_dir = _setup_library_ext(tmp_path, "my-ext")
+        _patch_mutation_config(monkeypatch, tmp_path, lib_dir=lib_dir)
+
+        resp = test_client.post(
+            "/api/extensions/my-ext/install",
+            headers=test_client.auth_headers,
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["progress_endpoint"] == "/api/extensions/my-ext/progress"
