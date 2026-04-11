@@ -863,8 +863,12 @@ OPENCODE_EOF
             ai_ok "OpenCode config already exists"
         fi
 
-        # Install as macOS LaunchAgent (auto-start on login)
-        mkdir -p "$HOME/Library/LaunchAgents"
+        # Install as macOS LaunchAgent (auto-start on login).
+        # Log path is intentionally decoupled from INSTALL_DIR: xpcproxy denies
+        # file-write-create on non-$HOME volumes, which causes the launchd spawn
+        # to exit 78 before the target process ever runs. $HOME/Library/Logs is
+        # always inside xpcproxy's sandbox writable set, so use that instead.
+        mkdir -p "$HOME/Library/LaunchAgents" "$HOME/Library/Logs/DreamServer"
         OPENCODE_LAUNCHD_PATH="$(_compute_launchd_path "${HOME}/.opencode/bin")"
         cat > "$OPENCODE_PLIST" <<PLIST_EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -899,9 +903,9 @@ OPENCODE_EOF
         <false/>
     </dict>
     <key>StandardOutPath</key>
-    <string>${INSTALL_DIR}/data/opencode-web.log</string>
+    <string>${HOME}/Library/Logs/DreamServer/opencode-web.log</string>
     <key>StandardErrorPath</key>
-    <string>${INSTALL_DIR}/data/opencode-web.log</string>
+    <string>${HOME}/Library/Logs/DreamServer/opencode-web.log</string>
 </dict>
 </plist>
 PLIST_EOF
@@ -923,7 +927,9 @@ fi
 # ── Dream Host Agent (extension lifecycle management) ──
 AGENT_PYTHON="$(command -v python3)"
 if [[ -f "${INSTALL_DIR}/bin/dream-host-agent.py" ]] && [[ -n "$AGENT_PYTHON" ]]; then
-    mkdir -p "$HOME/Library/LaunchAgents"
+    # See opencode-web block above for the xpcproxy sandbox rationale behind
+    # the $HOME-rooted log path.
+    mkdir -p "$HOME/Library/LaunchAgents" "$HOME/Library/Logs/DreamServer"
     DREAM_AGENT_PATH="$(_compute_launchd_path "")"
     if ! command -v docker >/dev/null 2>&1; then
         ai_warn "docker not found on PATH at install time — host agent will fail to start until Docker Desktop is launched and 'docker' resolves on your shell PATH"
@@ -960,9 +966,9 @@ if [[ -f "${INSTALL_DIR}/bin/dream-host-agent.py" ]] && [[ -n "$AGENT_PYTHON" ]]
         <false/>
     </dict>
     <key>StandardOutPath</key>
-    <string>${INSTALL_DIR}/data/dream-host-agent.log</string>
+    <string>${HOME}/Library/Logs/DreamServer/dream-host-agent.log</string>
     <key>StandardErrorPath</key>
-    <string>${INSTALL_DIR}/data/dream-host-agent.log</string>
+    <string>${HOME}/Library/Logs/DreamServer/dream-host-agent.log</string>
 </dict>
 </plist>
 AGENT_PLIST_EOF
