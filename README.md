@@ -24,7 +24,7 @@ If AI is becoming critical infrastructure, it shouldn’t be rented. Self-hostin
 
 ---
 
-> **Platform Support — March 2026**
+> **Platform Support — April 2026**
 >
 > | Platform | Status |
 > |----------|--------|
@@ -105,7 +105,7 @@ cd DreamServer
 
 > The `Set-ExecutionPolicy` command allows the installer script to run in the current session. It does not change your system-wide policy.
 
-The installer detects your GPU, picks the right model, generates credentials, starts all services, and creates a Desktop shortcut to the Dashboard. Manage with `.\dream-server\installers\windows\dream.ps1 status`.
+The installer detects your GPU, picks the right model, generates credentials, starts all services, and installs the Windows CLI. Manage with `cd $env:USERPROFILE\dream-server; .\dream.ps1 status`.
 
 </details>
 
