@@ -67,9 +67,6 @@ services:
     image: ghcr.io/open-webui/open-webui:v0.7.2
     container_name: dream-webui
     restart: unless-stopped
-    depends_on:
-      llama-server:
-        condition: service_healthy
     logging: *default-logging
     security_opt:
       - no-new-privileges:true

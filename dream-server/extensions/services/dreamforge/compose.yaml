@@ -43,9 +43,6 @@ services:
         reservations:
           cpus: '0.5'
           memory: 256M
-    depends_on:
-      llama-server:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3010/health"]
       interval: 30s
