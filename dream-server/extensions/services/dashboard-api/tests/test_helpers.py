@@ -15,7 +15,7 @@ from helpers import (
     get_llama_metrics, get_loaded_model, get_llama_context_size,
     get_disk_usage, dir_size_gb,
     _get_aio_session, set_services_cache, get_cached_services,
-    _check_host_service_health, _get_lifetime_tokens,
+    _get_lifetime_tokens,
 )
 from models import BootstrapStatus, ServiceStatus, DiskUsage
 
@@ -142,6 +142,51 @@ class TestGetBootstrapStatus:
         status = get_bootstrap_status()
         assert status.active is False
 
+    def test_inactive_when_failed(self, data_dir):
+        status_file = data_dir / "bootstrap-status.json"
+        status_file.write_text(json.dumps({"status": "failed", "model": "test.gguf"}))
+
+        status = get_bootstrap_status()
+        assert status.active is False
+
+    def test_inactive_when_model_file_on_disk(self, data_dir):
+        models_dir = data_dir / "models"
+        models_dir.mkdir(exist_ok=True)
+        (models_dir / "present.gguf").write_bytes(b"\x00" * 1024)
+
+        status_file = data_dir / "bootstrap-status.json"
+        status_file.write_text(json.dumps({
+            "status": "downloading", "model": "present.gguf",
+            "percent": 50, "bytesDownloaded": 500, "bytesTotal": 1024,
+        }))
+
+        status = get_bootstrap_status()
+        assert status.active is False
+
+    def test_active_during_verifying_even_if_file_exists(self, data_dir):
+        models_dir = data_dir / "models"
+        models_dir.mkdir(exist_ok=True)
+        (models_dir / "verifying.gguf").write_bytes(b"\x00" * 1024)
+
+        status_file = data_dir / "bootstrap-status.json"
+        status_file.write_text(json.dumps({
+            "status": "verifying", "model": "verifying.gguf",
+            "percent": 100, "bytesDownloaded": 1024, "bytesTotal": 1024,
+        }))
+
+        status = get_bootstrap_status()
+        assert status.active is True
+
+    def test_path_traversal_rejected(self, data_dir):
+        status_file = data_dir / "bootstrap-status.json"
+        status_file.write_text(json.dumps({
+            "status": "downloading", "model": "../../etc/passwd",
+            "percent": 50, "bytesDownloaded": 500, "bytesTotal": 1000,
+        }))
+
+        status = get_bootstrap_status()
+        assert status.active is True
+
 
 # --- _update_lifetime_tokens ---
 
@@ -246,6 +291,16 @@ class TestCheckServiceHealth:
         assert result.status == "healthy"
         assert result.id == "test-svc"
         assert result.port == 8080
+
+    @pytest.mark.asyncio
+    async def test_sends_host_localhost_header(self, mock_aiohttp_session, monkeypatch):
+        session = mock_aiohttp_session(status=200)
+        monkeypatch.setattr("helpers._get_aio_session", AsyncMock(return_value=session))
+
+        await check_service_health("test-svc", self._CONFIG)
+        session.get.assert_called_once()
+        _, kwargs = session.get.call_args
+        assert kwargs.get("headers", {}).get("Host") == "localhost"
 
     @pytest.mark.asyncio
     async def test_unhealthy_on_500(self, mock_aiohttp_session, monkeypatch):
@@ -613,50 +668,6 @@ class TestCheckServiceHealthSystemd:
         result = await check_service_health("opencode", config)
         assert result.status == "healthy"
         assert result.response_time_ms is None
-
-
-# --- _check_host_service_health ---
-
-
-class TestCheckHostServiceHealth:
-
-    _CONFIG = {
-        "name": "test-host-svc", "port": 3003, "external_port": 3003,
-        "health": "/health", "host": "localhost",
-    }
-
-    @pytest.mark.asyncio
-    async def test_healthy_on_200(self, mock_aiohttp_session, monkeypatch):
-        session = mock_aiohttp_session(status=200)
-        monkeypatch.setattr("helpers._get_aio_session", AsyncMock(return_value=session))
-        result = await _check_host_service_health("test-host-svc", self._CONFIG)
-        assert result.status == "healthy"
-
-    @pytest.mark.asyncio
-    async def test_down_on_timeout(self, monkeypatch):
-        session = MagicMock()
-        session.get = MagicMock(side_effect=asyncio.TimeoutError())
-        monkeypatch.setattr("helpers._get_aio_session", AsyncMock(return_value=session))
-        result = await _check_host_service_health("test-host-svc", self._CONFIG)
-        assert result.status == "down"
-
-    @pytest.mark.asyncio
-    async def test_down_on_connector_error(self, monkeypatch):
-        conn_key = MagicMock()
-        exc = aiohttp.ClientConnectorError(conn_key, OSError("Connection refused"))
-        session = MagicMock()
-        session.get = MagicMock(side_effect=exc)
-        monkeypatch.setattr("helpers._get_aio_session", AsyncMock(return_value=session))
-        result = await _check_host_service_health("test-host-svc", self._CONFIG)
-        assert result.status == "down"
-
-    @pytest.mark.asyncio
-    async def test_down_on_os_error(self, monkeypatch):
-        session = MagicMock()
-        session.get = MagicMock(side_effect=OSError("broken"))
-        monkeypatch.setattr("helpers._get_aio_session", AsyncMock(return_value=session))
-        result = await _check_host_service_health("test-host-svc", self._CONFIG)
-        assert result.status == "down"
 
 
 # --- get_model_info error branch ---

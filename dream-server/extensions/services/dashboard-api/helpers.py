@@ -252,7 +252,10 @@ async def check_service_health(service_id: str, config: dict) -> ServiceStatus:
     try:
         session = await _get_aio_session()
         start = asyncio.get_event_loop().time()
-        async with session.get(url) as resp:
+        # Send Host header so reverse-proxy services (e.g. Caddy in Baserow)
+        # route the request correctly instead of returning 404.
+        headers = {"Host": "localhost"}
+        async with session.get(url, headers=headers) as resp:
             response_time = (asyncio.get_event_loop().time() - start) * 1000
             status = "healthy" if resp.status < 400 else "unhealthy"
     except asyncio.TimeoutError:
@@ -272,34 +275,6 @@ async def check_service_health(service_id: str, config: dict) -> ServiceStatus:
         id=service_id, name=config["name"], port=config["port"],
         external_port=config.get("external_port", config["port"]),
         status=status, response_time_ms=round(response_time, 1) if response_time else None
-    )
-
-
-async def _check_host_service_health(service_id: str, config: dict) -> ServiceStatus:
-    """Check health of a host-level service via HTTP."""
-    port = config.get("external_port", config["port"])
-    host = os.environ.get("HOST_GATEWAY", "host.docker.internal")
-    health_port = config.get('health_port', port)
-    url = f"http://{host}:{health_port}{config['health']}"
-    status = "down"
-    response_time = None
-    try:
-        session = await _get_aio_session()
-        start = asyncio.get_event_loop().time()
-        async with session.get(url) as resp:
-            response_time = (asyncio.get_event_loop().time() - start) * 1000
-            status = "healthy" if resp.status < 400 else "unhealthy"
-    except asyncio.TimeoutError:
-        status = "down"
-    except aiohttp.ClientConnectorError:
-        status = "down"
-    except (aiohttp.ClientError, OSError) as e:
-        logger.debug(f"Host health check failed for {service_id} at {url}: {e}")
-        status = "down"
-    return ServiceStatus(
-        id=service_id, name=config["name"], port=config["port"],
-        external_port=config.get("external_port", config["port"]),
-        status=status, response_time_ms=round(response_time, 1) if response_time else None,
     )
 
 
@@ -449,10 +424,27 @@ def get_bootstrap_status() -> BootstrapStatus:
             data = json.load(f)
 
         status = data.get("status", "")
-        if status == "complete":
+        if status in ("complete", "failed", "cancelled", "error"):
             return BootstrapStatus(active=False)
         if status == "" and not data.get("bytesDownloaded") and not data.get("percent"):
             return BootstrapStatus(active=False)
+
+        # Reconcile with the filesystem: if the target model file is already
+        # present on disk, the download is effectively done regardless of what
+        # the status record says (covers stale "downloading" entries left by a
+        # crash or a parallel download path). Skip during "verifying" because
+        # the file has been renamed into place but SHA256 hasn't finished yet —
+        # returning inactive here would hide a subsequent verification failure.
+        model_name = data.get("model")
+        if model_name and status != "verifying":
+            models_dir = Path(DATA_DIR) / "models"
+            model_path = (models_dir / model_name).resolve()
+            if model_path.is_relative_to(models_dir.resolve()):
+                try:
+                    if model_path.exists() and model_path.stat().st_size > 0:
+                        return BootstrapStatus(active=False)
+                except OSError as e:
+                    logger.debug("bootstrap reconciliation stat failed: %s", e)
 
         eta_str = data.get("eta", "")
         eta_seconds = None

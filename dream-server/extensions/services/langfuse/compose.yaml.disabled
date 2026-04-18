@@ -38,7 +38,7 @@ services:
       LANGFUSE_INIT_USER_NAME: "DreamServer Admin"
       LANGFUSE_INIT_USER_PASSWORD: "${LANGFUSE_INIT_USER_PASSWORD}"
     ports:
-      - "127.0.0.1:${LANGFUSE_PORT:-3006}:3000"
+      - "${BIND_ADDRESS:-127.0.0.1}:${LANGFUSE_PORT:-3006}:3000"
     networks:
       - default
       - langfuse-internal
@@ -273,7 +273,7 @@ services:
         max-file: "3"
 
   langfuse-minio-init:
-    image: minio/mc:RELEASE.2025-09-07T16-13-09Z
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
     container_name: dream-langfuse-minio-init
     restart: "no"
     security_opt:
