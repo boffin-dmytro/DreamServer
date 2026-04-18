@@ -1,10 +1,10 @@
 # Dream Server Support Matrix
 
-Last updated: 2026-04-15
+Last updated: 2026-03-17
 
 ## What Works Today
 
-**Linux, Windows, and macOS are supported today. Intel Arc remains experimental.**
+**Linux, Windows, and macOS are fully supported. Intel Arc is experimental.**
 
 | Platform | Status | What you get today |
 |----------|--------|-------------------|
@@ -18,13 +18,13 @@ Last updated: 2026-04-15
 
 - `Tier A` — fully supported and actively tested in this repo
 - `Tier B` — supported (works end-to-end, broader validation ongoing)
-- `Tier C` — experimental or limited path with feature gaps or narrower validation
+- `Tier C` — experimental or planned (installer diagnostics only, no runtime)
 
 ## Platform Matrix (detailed)
 
 | Platform | GPU Path | Installer Tier | Notes |
 |---|---|---|---|
-| Linux (Ubuntu/Debian family) | NVIDIA (llama-server/CUDA) | Tier B | Installer path exists in `install-core.sh`; broader real-hardware validation is still ongoing |
+| Linux (Ubuntu/Debian family) | NVIDIA (llama-server/CUDA) | Tier B | Installer path exists in `install-core.sh`; broader distro test matrix still pending |
 | Linux (Strix Halo / AMD unified memory) | AMD (llama-server/ROCm) | Tier A | Primary path via `docker-compose.base.yml` + `docker-compose.amd.yml` |
 | Linux (Intel Arc A770/A750) | Intel SYCL (llama-server/oneAPI) | **Tier C** | `docker-compose.arc.yml`; builds llama.cpp from `intel/oneapi-basekit`; see [INTEL-ARC-GUIDE.md](INTEL-ARC-GUIDE.md) |
 | Windows (Docker Desktop + WSL2) | NVIDIA/AMD via Docker Desktop | Tier B | Standalone installer (`.\install.ps1`) with GPU auto-detection, Docker orchestration, health checks, and desktop shortcuts |
@@ -48,27 +48,28 @@ Last updated: 2026-04-15
 
 ## Current Truth
 
-- **Linux, Windows, and macOS are supported today.**
-- Linux + NVIDIA is supported but still needs broader real-hardware validation.
-- Windows installs via `.\install.ps1` with Docker Desktop + WSL2 backend. This is the supported Windows path today.
-- Windows native-only runtime without Docker Desktop + WSL2 is not the current production path.
+- **Linux, Windows, and macOS are fully supported.**
+- Linux + NVIDIA is supported but needs broader validation and CI matrix coverage.
+- Windows installs via `.\install.ps1` with Docker Desktop + WSL2 backend. Windows delegated installer flow is available via WSL2.
+- Windows native installer UX is Tier B (delegated via Docker Desktop + WSL2).
 - macOS installs via `./install.sh` — llama-server runs natively with Metal acceleration, all other services in Docker.
 - **Intel Arc (SYCL) is Tier C / experimental.** The installer auto-detects and selects the correct compose overlay and tier. Runtime works on A770/A750 (Linux). ComfyUI and Whisper GPU acceleration are not yet available for Arc. See [INTEL-ARC-GUIDE.md](INTEL-ARC-GUIDE.md) for limitations.
+- For release gates (CI), macOS (Apple Silicon) is documented as Tier C (installer MVP) in manifest; SUPPORT-MATRIX table may show Tier B for user-facing status.
 - Version baselines for triage are in `docs/KNOWN-GOOD-VERSIONS.md`.
 
 ## Roadmap
 
 | Target | Milestone |
 |--------|-----------|
-| **Now** | Linux AMD + NVIDIA + Windows + macOS supported |
+| **Now** | Linux AMD + NVIDIA + Windows + macOS fully supported |
 | **Now** | Intel Arc (SYCL) experimental — installer + runtime on A770/A750 |
-| **Ongoing** | Broaden real-hardware validation and release checks across supported platforms |
+| **Ongoing** | CI smoke matrix expansion for all platforms |
 | **Planned** | Promote Intel Arc to Tier B after broader A770/B580 validation |
 | **Planned** | Arc-accelerated Whisper STT overlay |
 
 ## Next Milestones
 
-1. Expand release checks and real-hardware validation for Linux NVIDIA, Windows, and macOS.
+1. Add CI smoke matrix for Linux NVIDIA/AMD and WSL logic checks.
 2. Expand macOS test coverage across M1/M2/M3/M4 variants and RAM tiers.
 3. Promote macOS from Tier B to Tier A after broader real-hardware validation.
 4. Validate Intel Arc B580 (Battlemage 12 GB) on the `ARC` tier.
