@@ -69,7 +69,13 @@
 
     function draw() {
       const { ctx, width, height } = getContext(canvas);
-      const allPoints = series.flatMap(s => s.points || []);
+      const normalizedSeries = series.map(s => ({
+        ...s,
+        points: (s.points || []).filter(p =>
+          Number.isFinite(+new Date(p.x)) && Number.isFinite(Number(p.y))
+        ),
+      }));
+      const allPoints = normalizedSeries.flatMap(s => s.points);
       if (!allPoints.length) {
         legend(legendEl, []);
         noData(ctx, width, height);
@@ -139,8 +145,8 @@
         ctx.fillStyle = COLORS.muted;
       });
 
-      series.forEach(s => {
-        const points = (s.points || []).filter(p => Number.isFinite(+new Date(p.x)));
+      normalizedSeries.forEach(s => {
+        const points = s.points;
         if (!points.length) return;
         if (s.fillColor) {
           linePath(ctx, points, xFor, yFor, margin.top + plotH, s.fillColor);
