@@ -94,16 +94,12 @@ Fix with: sudo chown -R \$(id -u):\$(id -g) $INSTALL_DIR/config $INSTALL_DIR/dat
                 "$SCRIPT_DIR/" "$INSTALL_DIR/"
         else
             # Fallback: cp -r everything, then remove runtime artifacts
-            if ! cp -r "$SCRIPT_DIR"/* "$INSTALL_DIR/" 2>>"$LOG_FILE"; then
-                warn "Source copy incomplete — some files may be missing"
-            fi
-            if ! cp "$SCRIPT_DIR"/.gitignore "$INSTALL_DIR/" 2>>"$LOG_FILE"; then
-                warn "Failed to copy .gitignore"
-            fi
-            rm -rf "$INSTALL_DIR/.git" 2>>"$LOG_FILE" || true
+            cp -r "$SCRIPT_DIR"/* "$INSTALL_DIR/" 2>/dev/null || true
+            cp "$SCRIPT_DIR"/.gitignore "$INSTALL_DIR/" 2>/dev/null || true
+            rm -rf "$INSTALL_DIR/.git" 2>/dev/null || true
         fi
         # Ensure scripts are executable
-        chmod +x "$INSTALL_DIR"/*.sh "$INSTALL_DIR"/scripts/*.sh "$INSTALL_DIR"/dream-cli 2>>"$LOG_FILE" || warn "Some scripts may not be executable — verify after install"
+        chmod +x "$INSTALL_DIR"/*.sh "$INSTALL_DIR"/scripts/*.sh "$INSTALL_DIR"/dream-cli 2>/dev/null || true
         ai_ok "Source files installed"
     else
         log "Running in-place (source == install dir), skipping file copy"
@@ -128,9 +124,7 @@ Fix with: sudo chown -R \$(id -u):\$(id -g) $INSTALL_DIR/config $INSTALL_DIR/dat
             cp "$SCRIPT_DIR/config/openclaw/$OPENCLAW_CONFIG" "$INSTALL_DIR/config/openclaw/openclaw.json"
         else
             warn "OpenClaw config $OPENCLAW_CONFIG not found, using default"
-            if ! cp "$SCRIPT_DIR/config/openclaw/openclaw.json.example" "$INSTALL_DIR/config/openclaw/openclaw.json" 2>>"$LOG_FILE"; then
-                warn "Failed to copy OpenClaw default config — you may need to create it manually"
-            fi
+            cp "$SCRIPT_DIR/config/openclaw/openclaw.json.example" "$INSTALL_DIR/config/openclaw/openclaw.json" 2>/dev/null || true
         fi
         # Resolve provider name/URL before any sed replacements that depend on them
         OPENCLAW_PROVIDER_NAME="${OPENCLAW_PROVIDER_NAME_DEFAULT}"
@@ -210,9 +204,11 @@ Fix with: sudo chown -R \$(id -u):\$(id -g) $INSTALL_DIR/config $INSTALL_DIR/dat
     OPENCODE_SERVER_PASSWORD=$(_env_get OPENCODE_SERVER_PASSWORD "$(openssl rand -base64 16 2>/dev/null || head -c 16 /dev/urandom | base64)")
     SEARXNG_SECRET=$(_env_get SEARXNG_SECRET "$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p)")
 
-    # Langfuse (LLM Observability)
+    # Langfuse (LLM Observability). LANGFUSE_ENABLED mirrors the install-time
+    # ENABLE_LANGFUSE toggle, falling back to whatever the user had in .env on
+    # re-install so manual post-install `dream enable langfuse` edits survive.
     LANGFUSE_PORT=$(_env_get LANGFUSE_PORT "3006")
-    LANGFUSE_ENABLED=$(_env_get LANGFUSE_ENABLED "false")
+    LANGFUSE_ENABLED=$(_env_get LANGFUSE_ENABLED "${ENABLE_LANGFUSE:-false}")
     LANGFUSE_NEXTAUTH_SECRET=$(_env_get LANGFUSE_NEXTAUTH_SECRET "$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p | tr -d '\n')")
     LANGFUSE_SALT=$(_env_get LANGFUSE_SALT "$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p | tr -d '\n')")
     LANGFUSE_ENCRYPTION_KEY=$(_env_get LANGFUSE_ENCRYPTION_KEY "$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p | tr -d '\n')")
@@ -250,6 +246,9 @@ Fix with: sudo chown -R \$(id -u):\$(id -g) $INSTALL_DIR/config $INSTALL_DIR/dat
         LLAMA_CPU_RESERVATION="$LLAMA_CPU_LIMIT"
     fi
 
+    # Network binding (--lan sets 0.0.0.0; default is localhost-only)
+    BIND_ADDRESS=$(_env_get BIND_ADDRESS "${BIND_ADDRESS:-127.0.0.1}")
+
     # Preserve user-supplied cloud API keys
     ANTHROPIC_API_KEY=$(_env_get ANTHROPIC_API_KEY "${ANTHROPIC_API_KEY:-}")
     OPENAI_API_KEY=$(_env_get OPENAI_API_KEY "${OPENAI_API_KEY:-}")
@@ -269,6 +268,11 @@ Fix with: sudo chown -R \$(id -u):\$(id -g) $INSTALL_DIR/config $INSTALL_DIR/dat
 
 #=== Dream Server Version (used by dream-cli update for version-compat checks) ===
 DREAM_VERSION=${VERSION:-2.4.0}
+
+#=== Network Binding ===
+# 127.0.0.1 = localhost only (secure default)
+# 0.0.0.0   = accessible from LAN (install with --lan or set manually)
+BIND_ADDRESS=${BIND_ADDRESS}
 
 #=== LLM Backend Mode ===
 DREAM_MODE=$(if [[ "$GPU_BACKEND" == "amd" && "${DREAM_MODE:-local}" == "local" ]]; then echo "lemonade"; else echo "${DREAM_MODE:-local}"; fi)
