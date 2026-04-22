@@ -1,7 +1,8 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { CheckCircle, Circle, ChevronRight, ChevronLeft, Mic, User, Settings, Play, Shield, Layers } from 'lucide-react'
 import { PreFlightChecks } from './PreFlightChecks'
 import { TemplatePicker } from './TemplatePicker'
+import { getTemplateStatus } from '../lib/templates'
 
 export default function SetupWizard({ onComplete }) {
   const [step, setStep] = useState(1)
@@ -14,14 +15,52 @@ export default function SetupWizard({ onComplete }) {
   const [testStatus, setTestStatus] = useState({ running: false, output: [], done: false, success: false })
   const [preflightIssues, setPreflightIssues] = useState([])
   const [templates, setTemplates] = useState([])
+  const [extensions, setExtensions] = useState([])
   const totalSteps = 6
 
+  // Holds the AbortController for the currently in-flight /api/setup/test
+  // stream (if any). Aborting it tells the server to release the subprocess
+  // and async generator so a user who abandons the wizard mid-diagnostic
+  // doesn't leave the backend running curls for ~2 minutes.
+  const diagControllerRef = useRef(null)
+
   useEffect(() => {
-    fetch('/api/templates')
-      .then(res => res.ok ? res.json() : { templates: [] })
-      .then(data => setTemplates(data.templates || []))
-      .catch(() => {})
+    return () => {
+      if (diagControllerRef.current) {
+        diagControllerRef.current.abort()
+      }
+    }
   }, [])
+
+  // Fetches templates and extensions in parallel and applies their state
+  // updates only after BOTH have settled. React 18 auto-batches the two
+  // setState calls that land in the same async tick, so template cards
+  // don't flash "available" for ~200ms while extensions are still in-flight.
+  // Promise.allSettled lets one side fail without aborting the other.
+  const refreshTemplateData = useCallback(async () => {
+    const [tRes, eRes] = await Promise.allSettled([
+      fetch('/api/templates').then(r => r.ok ? r.json() : { templates: [] }),
+      fetch('/api/extensions/catalog').then(r => r.ok ? r.json() : { extensions: [] })
+    ])
+    if (tRes.status === 'fulfilled') {
+      setTemplates(tRes.value.templates || [])
+    } else {
+      console.error('Failed to load templates:', tRes.reason)
+    }
+    if (eRes.status === 'fulfilled') {
+      setExtensions(eRes.value.extensions || [])
+    } else {
+      console.error('Failed to load extensions:', eRes.reason)
+    }
+  }, [])
+
+  // Re-fetch on every navigation to Step 2: the user may have just applied
+  // a template on a previous visit, in which case extensions state is stale
+  // and the "applied" indicator would lie.
+  useEffect(() => {
+    if (step !== 2) return
+    refreshTemplateData()
+  }, [step, refreshTemplateData])
 
   const voices = [
     { id: 'af_heart', name: 'Heart', desc: 'Warm, friendly female' },
@@ -41,10 +80,17 @@ export default function SetupWizard({ onComplete }) {
   }, [])
 
   const runDiagnostics = async () => {
+    // Cancel any in-flight diagnostic (re-running before previous completes).
+    if (diagControllerRef.current) {
+      diagControllerRef.current.abort()
+    }
+    const controller = new AbortController()
+    diagControllerRef.current = controller
+
     setTestStatus({ running: true, output: ['Starting diagnostic tests...'], done: false, success: false })
 
     try {
-      const res = await fetch('/api/setup/test', { method: 'POST' })
+      const res = await fetch('/api/setup/test', { method: 'POST', signal: controller.signal })
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
       // The backend streams plain text. We split on newlines so each script
@@ -91,7 +137,16 @@ export default function SetupWizard({ onComplete }) {
         setConfig(c => ({ ...c, tested: true }))
       }
     } catch (err) {
+      // Aborted fetches throw AbortError. That's the user cancelling or the
+      // component unmounting — don't surface it as a user-visible error.
+      if (err.name === 'AbortError') {
+        return
+      }
       setTestStatus(prev => ({ ...prev, running: false, done: true, success: false, output: [...prev.output, `Error: ${err.message}`] }))
+    } finally {
+      if (diagControllerRef.current === controller) {
+        diagControllerRef.current = null
+      }
     }
   }
 
@@ -149,7 +204,11 @@ export default function SetupWizard({ onComplete }) {
                 Pick a pre-configured set of services to get started quickly, or skip to customize later.
               </p>
               {templates.length > 0 ? (
-                <TemplatePicker templates={templates} compact />
+                <TemplatePicker
+                  templates={templates.map(t => ({ ...t, _status: getTemplateStatus(t, extensions) }))}
+                  compact
+                  onApplied={refreshTemplateData}
+                />
               ) : (
                 <p className="text-sm text-theme-text-muted">No templates available.</p>
               )}
