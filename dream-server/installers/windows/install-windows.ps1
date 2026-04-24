@@ -877,6 +877,23 @@ if ($allHealthy) {
     Write-SuccessCard
 }
 
+# ── Pre-mark setup wizard complete ────────────────────────────────────────────
+# The dashboard-api reads ${INSTALL_DIR}/data/config/setup-complete.json
+# (mounted at /data/config/setup-complete.json inside the container) to decide
+# first_run state. Writing this here prevents the wizard from reappearing on
+# every visit after a fresh install. Non-fatal.
+try {
+    $setupConfigDir = Join-Path $installDir "data\config"
+    $setupCompleteFile = Join-Path $setupConfigDir "setup-complete.json"
+    New-Item -Path $setupConfigDir -ItemType Directory -Force | Out-Null
+    $completedAt = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+    $payload = @{ completed_at = $completedAt; version = "1.0.0" } | ConvertTo-Json -Compress
+    Set-Content -Path $setupCompleteFile -Value $payload -Encoding UTF8
+    Write-AISuccess "Setup wizard pre-marked complete"
+} catch {
+    Write-AIWarn "Could not write setup-complete.json (non-fatal): $_"
+}
+
 # ── Summary JSON (for CI / automation) ───────────────────────────────────────
 if ($SummaryJsonPath) {
     $summary = @{

@@ -1150,6 +1150,22 @@ else
     ai_warn "Perplexica auto-config skipped -- complete setup at http://localhost:3004"
 fi
 
+# ── Pre-mark setup wizard complete ──
+# The dashboard-api reads ${INSTALL_DIR}/data/config/setup-complete.json
+# (mounted at /data/config/setup-complete.json inside the container) to
+# decide first_run state. Writing this here prevents the wizard from
+# reappearing on every visit after a fresh install. Non-fatal.
+_setup_config_dir="${INSTALL_DIR}/data/config"
+_setup_complete_file="${_setup_config_dir}/setup-complete.json"
+_completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+if mkdir -p "${_setup_config_dir}" 2>/dev/null \
+    && printf '{"completed_at": "%s", "version": "1.0.0"}\n' "${_completed_at}" > "${_setup_complete_file}" 2>/dev/null \
+    && chmod 644 "${_setup_complete_file}" 2>/dev/null; then
+    ai_ok "Setup wizard pre-marked complete"
+else
+    ai_warn "Could not write ${_setup_complete_file} (non-fatal)"
+fi
+
 # ── Success card ──
 if ! $ALL_HEALTHY; then
     echo ""
