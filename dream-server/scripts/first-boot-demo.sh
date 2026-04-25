@@ -92,8 +92,8 @@ check_service() {
     local name=$1
     local url=$2
     local endpoint=${3:-/health}
-    
-    if curl -sf "${url}${endpoint}" > /dev/null 2>&1; then
+
+    if curl -sf --max-time 10 "${url}${endpoint}" > /dev/null 2>&1; then
         success "$name is running at $url"
         return 0
     else
@@ -143,7 +143,7 @@ if check_service "Open WebUI" "$WEBUI_URL" "/"; then
 fi
 
 # Optional services
-if curl -sf "${WHISPER_URL}/health" > /dev/null 2>&1; then
+if curl -sf --max-time 10 "${WHISPER_URL}/health" > /dev/null 2>&1; then
     success "Whisper STT is running (voice input enabled)"
     WHISPER_AVAILABLE=true
     ((SERVICES_OK++))
@@ -153,7 +153,7 @@ else
     WHISPER_AVAILABLE=false
 fi
 
-if curl -sf "${PIPER_URL}" > /dev/null 2>&1; then
+if curl -sf --max-time 10 "${PIPER_URL}" > /dev/null 2>&1; then
     success "OpenTTS TTS is running (voice output enabled)"
     PIPER_AVAILABLE=true
     ((SERVICES_OK++))
@@ -163,7 +163,7 @@ else
     PIPER_AVAILABLE=false
 fi
 
-if curl -sf "${N8N_URL}/healthz" > /dev/null 2>&1; then
+if curl -sf --max-time 10 "${N8N_URL}/healthz" > /dev/null 2>&1; then
     success "n8n Workflows is running (automation enabled)"
     N8N_AVAILABLE=true
     ((SERVICES_OK++))
@@ -191,7 +191,7 @@ header "💬 Demo 1: Local Chat Completion"
 
 demo "Asking your local AI a question..."
 
-RESPONSE=$(curl -sf "${LLM_URL}/v1/chat/completions" \
+RESPONSE=$(curl -sf --max-time 30 "${LLM_URL}/v1/chat/completions" \
     -H "Content-Type: application/json" \
     -d '{
         "model": "Qwen/Qwen2.5-32B-Instruct-AWQ",
@@ -219,7 +219,7 @@ header "🧑‍💻 Demo 2: Code Assistance"
 
 demo "Asking for help with a Python function..."
 
-CODE_RESPONSE=$(curl -sf "${LLM_URL}/v1/chat/completions" \
+CODE_RESPONSE=$(curl -sf --max-time 30 "${LLM_URL}/v1/chat/completions" \
     -H "Content-Type: application/json" \
     -d '{
         "model": "Qwen/Qwen2.5-32B-Instruct-AWQ",
