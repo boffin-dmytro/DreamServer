@@ -6,11 +6,15 @@ on:
     paths:
       - "dream-server/docker-compose*.yml"
       - "dream-server/compose/**"
+      - "dream-server/extensions/services/*/compose.yaml"
+      - "dream-server/extensions/services/*/compose.yml"
   pull_request:
     branches: [main]
     paths:
       - "dream-server/docker-compose*.yml"
       - "dream-server/compose/**"
+      - "dream-server/extensions/services/*/compose.yaml"
+      - "dream-server/extensions/services/*/compose.yml"
 
 permissions:
   contents: read
@@ -63,3 +67,36 @@ jobs:
 
           echo ""
           echo "All compose files validated successfully."
+
+      - name: Validate extension compose files
+        run: |
+          extension_compose_files=$(find dream-server/extensions/services/ -name 'compose.yaml' -o -name 'compose.yml' 2>/dev/null || true)
+
+          if [ -z "$extension_compose_files" ]; then
+            echo "No extension compose files found"
+            exit 0
+          fi
+
+          echo "Found extension compose files:"
+          echo "$extension_compose_files"
+          echo ""
+
+          failed=0
+          for f in $extension_compose_files; do
+            echo "Validating $f ..."
+            if docker compose -f "$f" config --quiet 2>&1; then
+              echo "  OK"
+            else
+              echo "  FAILED"
+              failed=1
+            fi
+          done
+
+          if [ "$failed" -ne 0 ]; then
+            echo ""
+            echo "One or more extension compose files failed validation."
+            exit 1
+          fi
+
+          echo ""
+          echo "All extension compose files validated successfully."
