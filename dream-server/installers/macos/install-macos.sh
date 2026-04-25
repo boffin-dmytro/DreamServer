@@ -867,12 +867,12 @@ else
     if [[ ! -x "$OPENCODE_BIN" ]]; then
         ai "Installing OpenCode..."
         tmpfile=$(mktemp /tmp/opencode-install.XXXXXX.sh)
+        trap 'rm -f "$tmpfile"' EXIT INT TERM
         if curl -fsSL --max-time 300 https://opencode.ai/install -o "$tmpfile" 2>/dev/null && bash "$tmpfile" >> "$DS_LOG_FILE" 2>&1; then
             ai_ok "OpenCode installed (~/.opencode/bin/opencode)"
         else
             ai_warn "OpenCode install failed — install later with: curl -fsSL https://opencode.ai/install | bash"
         fi
-        rm -f "$tmpfile"
     else
         ai_ok "OpenCode already installed"
     fi
