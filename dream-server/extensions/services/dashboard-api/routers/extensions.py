@@ -266,7 +266,10 @@ _LOOPBACK_VAR_DEFAULT_RE = re.compile(
 def _host_part_is_loopback(host: str) -> bool:
     if host == "127.0.0.1":
         return True
-    return bool(_LOOPBACK_VAR_DEFAULT_RE.match(host))
+    # fullmatch (not match) so trailing characters never sneak past the
+    # `$`-anchor — Python's `$` matches before a single trailing newline by
+    # default, which YAML won't normally produce but is worth defending.
+    return bool(_LOOPBACK_VAR_DEFAULT_RE.fullmatch(host))
 
 
 def _split_port_host(port_str: str) -> tuple[Optional[str], str]:

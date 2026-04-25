@@ -1338,6 +1338,191 @@ class TestComposeScanEdgeCases:
         assert "dangerous security_opt" in resp.json()["detail"]
 
 
+# --- Direct unit tests for the port-binding helpers ---
+
+
+class TestHostPartIsLoopback:
+    """Direct unit tests for `_host_part_is_loopback` — pin the regex
+    behaviour against future refactors. Triggered through the install
+    endpoint by TestComposeScanEdgeCases above; these tests are the
+    fast-feedback layer."""
+
+    def test_literal_loopback(self):
+        from routers.extensions import _host_part_is_loopback
+        assert _host_part_is_loopback("127.0.0.1") is True
+
+    def test_var_with_loopback_default(self):
+        from routers.extensions import _host_part_is_loopback
+        assert _host_part_is_loopback("${BIND_ADDRESS:-127.0.0.1}") is True
+        assert _host_part_is_loopback("${MY_HOST:-127.0.0.1}") is True
+
+    def test_rejects_var_without_default(self):
+        from routers.extensions import _host_part_is_loopback
+        assert _host_part_is_loopback("${BIND_ADDRESS}") is False
+
+    def test_rejects_non_loopback_default(self):
+        from routers.extensions import _host_part_is_loopback
+        assert _host_part_is_loopback("${BIND_ADDRESS:-0.0.0.0}") is False
+        assert _host_part_is_loopback("${BIND_ADDRESS:-localhost}") is False
+
+    def test_rejects_assignment_default_form(self):
+        """Compose's ${VAR:=default} (assignment) is not the same as
+        ${VAR:-default} (substitution); reject defensively."""
+        from routers.extensions import _host_part_is_loopback
+        assert _host_part_is_loopback("${BIND_ADDRESS:=127.0.0.1}") is False
+
+    def test_rejects_dash_only_default_form(self):
+        """${VAR-default} (only-if-unset) differs from ${VAR:-default}
+        (only-if-unset-or-empty). Strictly require the colon form."""
+        from routers.extensions import _host_part_is_loopback
+        assert _host_part_is_loopback("${BIND_ADDRESS-127.0.0.1}") is False
+
+    def test_rejects_zero_padded_loopback(self):
+        from routers.extensions import _host_part_is_loopback
+        assert _host_part_is_loopback("127.000.000.001") is False
+        assert _host_part_is_loopback("${BIND_ADDRESS:-127.000.000.001}") is False
+
+    def test_rejects_ipv6_loopback(self):
+        """IPv6 binds aren't in scope for the LAN toggle."""
+        from routers.extensions import _host_part_is_loopback
+        assert _host_part_is_loopback("::1") is False
+        assert _host_part_is_loopback("[::1]") is False
+
+    def test_rejects_trailing_newline(self):
+        """fullmatch must defend against `$` matching before \\n."""
+        from routers.extensions import _host_part_is_loopback
+        assert _host_part_is_loopback("127.0.0.1\n") is False
+        assert _host_part_is_loopback("${BIND_ADDRESS:-127.0.0.1}\n") is False
+
+    def test_rejects_empty_and_whitespace(self):
+        from routers.extensions import _host_part_is_loopback
+        assert _host_part_is_loopback("") is False
+        assert _host_part_is_loopback(" 127.0.0.1") is False
+        assert _host_part_is_loopback("127.0.0.1 ") is False
+
+
+class TestSplitPortHost:
+    """Direct unit tests for `_split_port_host` — naive str.split(':') is
+    wrong on the `:-` default operator inside `${VAR:-127.0.0.1}`. These
+    tests pin the malformed-input behaviour as fail-closed."""
+
+    def test_literal_host_three_parts(self):
+        from routers.extensions import _split_port_host
+        assert _split_port_host("127.0.0.1:8080:80") == ("127.0.0.1", "8080:80")
+
+    def test_var_with_default(self):
+        from routers.extensions import _split_port_host
+        assert _split_port_host("${BIND_ADDRESS:-127.0.0.1}:8080:80") == (
+            "${BIND_ADDRESS:-127.0.0.1}", "8080:80",
+        )
+
+    def test_var_with_default_and_proto(self):
+        from routers.extensions import _split_port_host
+        assert _split_port_host("${BIND_ADDRESS:-127.0.0.1}:8554:8554/udp") == (
+            "${BIND_ADDRESS:-127.0.0.1}", "8554:8554/udp",
+        )
+
+    def test_var_no_default(self):
+        """`${VAR}:8080:80` — no `:-` default, but still has the brace."""
+        from routers.extensions import _split_port_host
+        assert _split_port_host("${BIND_ADDRESS}:8080:80") == (
+            "${BIND_ADDRESS}", "8080:80",
+        )
+
+    def test_var_with_default_alone(self):
+        """`${VAR:-127.0.0.1}` with NO host:container suffix — must
+        return rest='' so the caller's `':' not in core` check kicks in."""
+        from routers.extensions import _split_port_host
+        host, rest = _split_port_host("${BIND_ADDRESS:-127.0.0.1}")
+        assert rest == ""
+
+    def test_malformed_no_closing_brace(self):
+        """`${VAR:-127.0.0.1` (missing `}`) — fail closed."""
+        from routers.extensions import _split_port_host
+        host, rest = _split_port_host("${BIND_ADDRESS:-127.0.0.1")
+        assert rest == ""
+
+    def test_malformed_no_separator_after_brace(self):
+        """`${VAR:-127.0.0.1}8080:80` (no `:` between `}` and host port)."""
+        from routers.extensions import _split_port_host
+        host, rest = _split_port_host("${BIND_ADDRESS:-127.0.0.1}8080:80")
+        assert rest == ""
+
+    def test_two_part_with_digit_host_returns_no_host(self):
+        """`8080:80` — host position is a port number, no host_ip; treat
+        as no-host so caller rejects (binds 0.0.0.0)."""
+        from routers.extensions import _split_port_host
+        assert _split_port_host("8080:80") == (None, "8080:80")
+
+    def test_bare_port_returns_no_host(self):
+        from routers.extensions import _split_port_host
+        assert _split_port_host("8080") == (None, "8080")
+
+    def test_empty_string(self):
+        from routers.extensions import _split_port_host
+        assert _split_port_host("") == (None, "")
+
+
+class TestScanComposePortBindingRegressionLocks:
+    """Regression locks for forms that must STAY rejected even though
+    they vaguely look like loopback bindings."""
+
+    def test_ipv6_loopback_bracketed_rejected(
+        self, test_client, monkeypatch, tmp_path,
+    ):
+        """`[::1]:8080:80` is not in the policy; must be rejected."""
+        compose = (
+            "services:\n  svc:\n    image: test\n"
+            "    ports:\n      - '[::1]:8080:80'\n"
+        )
+        lib_dir = _setup_library_ext(tmp_path, "ipv6-ext", compose_content=compose)
+        _patch_mutation_config(monkeypatch, tmp_path, lib_dir=lib_dir)
+
+        resp = test_client.post(
+            "/api/extensions/ipv6-ext/install",
+            headers=test_client.auth_headers,
+        )
+        assert resp.status_code == 400
+        assert "127.0.0.1" in resp.json()["detail"]
+
+    def test_var_with_proto_suffix_accepted(
+        self, test_client, monkeypatch, tmp_path,
+    ):
+        """`${VAR:-127.0.0.1}:8554:8554/udp` is the sanctioned pattern
+        with an explicit /proto suffix (e.g. frigate's WebRTC port)."""
+        compose = (
+            "services:\n  svc:\n    image: test:latest\n"
+            "    ports:\n      - '${BIND_ADDRESS:-127.0.0.1}:8554:8554/udp'\n"
+        )
+        lib_dir = _setup_library_ext(tmp_path, "udp-ext", compose_content=compose)
+        _patch_mutation_config(monkeypatch, tmp_path, lib_dir=lib_dir)
+
+        resp = test_client.post(
+            "/api/extensions/udp-ext/install",
+            headers=test_client.auth_headers,
+        )
+        assert resp.status_code == 200
+
+    def test_hostname_in_host_position_rejected(
+        self, test_client, monkeypatch, tmp_path,
+    ):
+        """A hostname like `localhost` is not loopback under the regex —
+        the runtime resolution might not even resolve to 127.0.0.1
+        (IPv6 ::1, /etc/hosts override, etc.)."""
+        compose = (
+            "services:\n  svc:\n    image: test\n"
+            "    ports:\n      - 'localhost:8080:80'\n"
+        )
+        lib_dir = _setup_library_ext(tmp_path, "host-ext", compose_content=compose)
+        _patch_mutation_config(monkeypatch, tmp_path, lib_dir=lib_dir)
+
+        resp = test_client.post(
+            "/api/extensions/host-ext/install",
+            headers=test_client.auth_headers,
+        )
+        assert resp.status_code == 400
+
+
 # --- skip_name_collision flag isolation ---
 
 
