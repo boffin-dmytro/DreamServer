@@ -1354,11 +1354,14 @@ class TestScanComposeSkipGpuPassthroughCheck:
         _scan_compose_content(compose, skip_gpu_passthrough_check=True)
 
     def test_handles_null_resources_without_500(self, tmp_path):
-        """Malformed compose with `deploy: { resources: null }` must NOT raise
-        AttributeError (which would surface as a 500). The scanner should
-        treat null sub-dicts as "no GPU request" and pass through cleanly.
-        Regression for the audit-flagged case where chained .get() returns
-        None and breaks the next .get() call.
+        """Strict regression for the audit-flagged bug: `deploy: { resources: null }`.
+
+        Pre-fix code did `deploy.get("resources", {}).get("reservations", {})`.
+        `dict.get(key, default)` returns the value when the key is present,
+        NOT the default — so `{"resources": None}.get("resources", {})` yields
+        None, and the next `.get()` AttributeError'd → 500 to the caller.
+        The fix's `isinstance(resources, dict)` guard short-circuits cleanly
+        because no GPU passthrough request can be expressed via null resources.
         """
         from routers.extensions import _scan_compose_content
         compose = tmp_path / "compose.yaml"
@@ -1371,9 +1374,13 @@ class TestScanComposeSkipGpuPassthroughCheck:
         _scan_compose_content(compose)
 
     def test_handles_null_reservations_without_500(self, tmp_path):
-        """Same shape one level deeper: `resources: { reservations: null }`.
-        Without the isinstance guard at each level, the chained .get() would
-        AttributeError on None and surface as a 500.
+        """Defense-in-depth: `resources: { reservations: null }`.
+
+        The pre-fix code was already safe at this level — its leaf check
+        `isinstance(reservations, dict) and reservations.get("devices")`
+        short-circuited on `None`. This test locks the behavior in so a
+        future refactor that drops the leaf isinstance check (e.g. relying
+        only on the new outer guards) cannot reintroduce a 500 here.
         """
         from routers.extensions import _scan_compose_content
         compose = tmp_path / "compose.yaml"
@@ -1387,7 +1394,15 @@ class TestScanComposeSkipGpuPassthroughCheck:
         _scan_compose_content(compose)
 
     def test_handles_null_deploy_without_500(self, tmp_path):
-        """And one level shallower: `deploy: null`. Same reasoning."""
+        """Defense-in-depth: `deploy: null`.
+
+        The pre-fix code was already safe at this level via
+        `deploy = svc_def.get("deploy") or {}` — None is falsy and falls
+        through to `{}`. This test locks the behavior in so a future
+        refactor that drops the `or {}` short-circuit (e.g. switching to
+        explicit isinstance gating without the falsy fallback) cannot
+        reintroduce a 500 here.
+        """
         from routers.extensions import _scan_compose_content
         compose = tmp_path / "compose.yaml"
         compose.write_text(
