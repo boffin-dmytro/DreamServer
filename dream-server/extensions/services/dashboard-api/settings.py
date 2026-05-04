@@ -6,7 +6,6 @@ resolvers, template-path resolvers, cache). Functions that call those resolvers
 remain in main.py so that test monkeypatches continue to intercept them.
 """
 
-import json
 import re
 import urllib.request
 from pathlib import Path
